@@ -6,16 +6,12 @@ import '../models/song.dart';
 class YoutubeService {
   final yt = YoutubeExplode();
 
-  // Lấy danh sách video từ link (hỗ trợ video đơn hoặc playlist)
   Future<List<Map<String, dynamic>>> fetchVideosFromLink(String link) async {
     try {
-      // Kiểm tra nếu là playlist
       if (link.contains('list=')) {
         final playlist = await yt.playlists.get(link);
-        // getVideos trả về Stream<Video>, dùng toList() để chờ tất cả
         final videos = await yt.playlists.getVideos(playlist.id).toList();
         return videos.map((video) {
-          // Tạo URL thumbnail từ videoId (luôn có sẵn, không phụ thuộc ThumbnailSet)
           final thumbnailUrl = 'https://img.youtube.com/vi/${video.id.value}/hqdefault.jpg';
           return {
             'id': video.id.value,
@@ -25,7 +21,6 @@ class YoutubeService {
           };
         }).toList();
       } else {
-        // Video đơn
         final video = await yt.videos.get(link);
         final thumbnailUrl = 'https://img.youtube.com/vi/${video.id.value}/hqdefault.jpg';
         return [
@@ -43,35 +38,50 @@ class YoutubeService {
     }
   }
 
-  // Tải audio của một video, lưu vào thư mục Documents, trả về đường dẫn file
   Future<String> downloadAudio(String videoId, String title) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      // Tạo tên file an toàn
       String safeTitle = title.replaceAll(RegExp(r'[^\w\s]'), '').replaceAll(' ', '_');
-      final filePath = '${dir.path}/$safeTitle.m4a';
-      final file = File(filePath);
 
-      // Nếu file đã tồn tại, trả về luôn
+      // Luôn lưu dưới dạng .mp4 tiêu chuẩn
+      String filePath = '${dir.path}/$safeTitle.mp4';
+      File file = File(filePath);
+
+      // Xóa file cũ nếu tồn tại (tránh dùng file hỏng)
       if (await file.exists()) {
-        return filePath;
+        await file.delete();
       }
 
-      // Lấy manifest và chọn luồng âm thanh tốt nhất
       final manifest = await yt.videos.streamsClient.getManifest(videoId);
-      final audioStreamInfo = manifest.audioOnly.withHighestBitrate();
 
-      // withHighestBitrate có thể trả về null, vẫn giữ kiểm tra
-      if (audioStreamInfo == null) {
-        throw Exception('Không tìm thấy luồng âm thanh cho video $videoId');
+      // GIẢI PHÁP: Sử dụng luồng muxed (Audio + Video) thay vì audioOnly.
+      // Trình phát sẽ đọc file mp4 này như một file nhạc bình thường.
+      // Dùng withLowestBitrate() để chọn chất lượng hình ảnh thấp nhất -> file nhẹ nhất.
+      final muxedStreams = manifest.muxed.toList();
+      if (muxedStreams.isEmpty) {
+        throw Exception('Không có luồng muxed (video + audio)');
+      }
+      muxedStreams.sort((a, b) => a.bitrate.compareTo(b.bitrate));
+      final streamInfo = muxedStreams.first; // bitrate thấp nhất → file nhẹ
+
+      if (streamInfo == null) {
+        throw Exception('Không tìm thấy luồng âm thanh tiêu chuẩn');
       }
 
-      // Tải về
-      final stream = yt.videos.streamsClient.get(audioStreamInfo);
-      final fileStream = file.openWrite();
-      await stream.pipe(fileStream);
-      await fileStream.flush();
-      await fileStream.close();
+      print('Đang tải luồng tiêu chuẩn: ${streamInfo.bitrate} kbps, định dạng: ${streamInfo.container}');
+
+      // Tiến hành tải và ghi vào bộ nhớ
+      final stream = yt.videos.streamsClient.get(streamInfo);
+      final sink = file.openWrite();
+      await stream.pipe(sink);
+      await sink.close();
+
+      final fileSize = await file.length();
+      if (fileSize == 0) {
+        throw Exception('File rỗng, tải thất bại');
+      }
+
+      print('✅ Tải thành công: $filePath, Kích thước: ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB');
 
       return filePath;
     } catch (e) {
@@ -80,7 +90,6 @@ class YoutubeService {
     }
   }
 
-  // Tải toàn bộ playlist (có delay 2s giữa các bài)
   Future<List<Song>> downloadPlaylist(String link, Function(int, int) onProgress) async {
     try {
       final videos = await fetchVideosFromLink(link);
@@ -102,7 +111,6 @@ class YoutubeService {
         } catch (e) {
           print('Lỗi tải bài ${video['title']}: $e');
         }
-        // Nghỉ 2 giây trước bài tiếp theo (trừ bài cuối)
         if (i < total - 1) {
           await Future.delayed(const Duration(seconds: 2));
         }
@@ -114,7 +122,6 @@ class YoutubeService {
     }
   }
 
-  // Đóng client khi không dùng
   void dispose() {
     yt.close();
   }

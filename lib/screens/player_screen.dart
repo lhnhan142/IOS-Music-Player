@@ -1,4 +1,3 @@
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import '../models/song.dart';
 import '../services/audio_manager.dart';
@@ -38,8 +37,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _audioManager.durationStream.listen((dur) {
       if (mounted) setState(() => _duration = dur);
     });
-    _audioManager.playerStateStream.listen((state) {
-      if (mounted) setState(() => _isPlaying = state == PlayerState.playing);
+    // just_audio trả về bool playing
+    _audioManager.playerStateStream.listen((isPlaying) {
+      if (mounted) setState(() => _isPlaying = isPlaying);
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -102,8 +102,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   onPressed: () => _changeSong(_currentIndex - 1),
                 ),
                 IconButton(
-                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow,
-                      size: 40),
+                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, size: 40),
                   onPressed: () async {
                     if (_isPlaying) {
                       await _audioManager.pause();
