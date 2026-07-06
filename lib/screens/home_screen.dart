@@ -7,6 +7,7 @@ import '../services/yt_service.dart';
 import '../services/audio_manager.dart';
 import '../widgets/song_item.dart';
 import 'player_screen.dart';
+import 'dart:developer';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -57,15 +58,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() => _isLoading = true);
     try {
-      // Gọi hàm tải cũ (tuần tự, không song song)
       final downloaded = await _ytService.downloadPlaylist(
         url,
             (current, total) {
-          print('Đã tải $current/$total');
+          // Có thể hiển thị tiến độ ở đây
+          debugPrint('Đã tải $current/$total');
         },
       );
 
-      // Lưu vào database
       for (var song in downloaded) {
         await _db.insertSong(song);
       }
@@ -162,15 +162,29 @@ class _HomeScreenState extends State<HomeScreen> {
             itemBuilder: (ctx, i) => SongItem(
               song: _songs[i],
               onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => PlayerScreen(
-                      songs: _songs,
-                      initialIndex: i,
+                // Nếu đang có bài phát, mở với playlist và index hiện tại của AudioManager
+                if (_audio.hasSong && _audio.playlist != null) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PlayerScreen(
+                        songs: _audio.playlist!,
+                        initialIndex: _audio.currentIndex,
+                      ),
                     ),
-                  ),
-                );
+                  );
+                } else {
+                  // Chưa có bài, mở với bài được chọn
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PlayerScreen(
+                        songs: _songs,
+                        initialIndex: i,
+                      ),
+                    ),
+                  );
+                }
               },
               onLongPress: () => _deleteSong(_songs[i]),
             ),
@@ -201,16 +215,25 @@ class _HomeScreenState extends State<HomeScreen> {
           right: 0,
           child: GestureDetector(
             onTap: () {
-              final currentSong = _audio.currentSong;
-              if (currentSong != null) {
-                final index = _songs.indexOf(currentSong);
-                if (index != -1) {
+              if (_audio.hasSong && _audio.playlist != null) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => PlayerScreen(
+                      songs: _audio.playlist!,
+                      initialIndex: _audio.currentIndex,
+                    ),
+                  ),
+                );
+              } else {
+                // Nếu không có bài, mở với bài đầu tiên nếu có
+                if (_songs.isNotEmpty) {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (_) => PlayerScreen(
                         songs: _songs,
-                        initialIndex: index,
+                        initialIndex: 0,
                       ),
                     ),
                   );
@@ -232,10 +255,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(title, style: const TextStyle(color: Colors.white, fontSize: 14),
-                            overflow: TextOverflow.ellipsis),
-                        Text(artist, style: const TextStyle(color: Colors.grey, fontSize: 12),
-                            overflow: TextOverflow.ellipsis),
+                        Text(
+                          title,
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          artist,
+                          style: const TextStyle(color: Colors.grey, fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ],
                     ),
                   ),

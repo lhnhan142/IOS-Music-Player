@@ -35,12 +35,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex;
-    _audio.setPlaylist(widget.songs, _currentIndex);
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _audio.play(_currentSong);
-    });
+    if (_audio.playlist == null || _audio.playlist!.isEmpty) {
+      _audio.setPlaylist(widget.songs, _currentIndex);
+    }
 
+    // Lấy giá trị hiện tại từ AudioManager
+    _position = _audio.currentPosition;
+    _duration = _audio.currentDuration;
+
+    // Lắng nghe stream để cập nhật
     _audio.positionStream.listen((pos) {
       if (mounted) setState(() => _position = pos);
     });
@@ -49,29 +53,43 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
     _audio.playerStateStream.listen((state) {
       if (mounted) {
-        final wasPlaying = _isPlaying;
         setState(() => _isPlaying = state == PlayerState.playing);
-        if (wasPlaying && state == PlayerState.stopped && !_isStoppedByUser) {
-          _handleSongEnd();
-        }
-        if (state != PlayerState.stopped) {
+        if (state != PlayerState.stopped && state != PlayerState.completed) {
           _isStoppedByUser = false;
         }
+      }
+    });
+    _audio.playerCompleteStream.listen((_) {
+      if (mounted && !_isStoppedByUser) {
+        _handleSongEnd();
+      }
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final currentPlaying = _audio.currentSong;
+      if (currentPlaying == null || currentPlaying.localPath != _currentSong.localPath) {
+        _audio.play(_currentSong);
+      } else {
+        setState(() {
+          _isPlaying = _audio.isPlaying;
+        });
       }
     });
   }
 
   @override
   void dispose() {
-    // Không dispose audio manager
+    // Không dispose AudioManager (dùng toàn cục)
     super.dispose();
   }
 
   Future<void> _handleSongEnd() async {
     if (_repeatMode == RepeatMode.one) {
-      await _audio.play(_currentSong);
+      await _audio.seek(Duration.zero);
+      await _audio.resume();
       return;
     }
+
     if (_repeatMode == RepeatMode.all) {
       await _audio.next();
       final newSong = _audio.currentSong;
@@ -81,6 +99,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
       return;
     }
+
     if (_autoNext) {
       await _audio.next();
       final newSong = _audio.currentSong;
@@ -90,7 +109,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     } else {
       _isStoppedByUser = true;
-      await _audio.stop();
+      await _audio.seek(Duration.zero);
+      await _audio.pause();
       setState(() => _isPlaying = false);
     }
   }
@@ -127,6 +147,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final double maxValue = _duration.inSeconds.toDouble() > 1 ? _duration.inSeconds.toDouble() : 1.0;
+    final double currentValue = _position.inSeconds.toDouble().clamp(0, maxValue);
+
     return Scaffold(
       appBar: AppBar(title: Text(_currentSong.title)),
       body: Padding(
@@ -142,9 +165,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Text(_currentSong.artist ?? '', style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 20),
             Slider(
-              value: _position.inSeconds.toDouble(),
-              max: _duration.inSeconds.toDouble() > 0 ? _duration.inSeconds.toDouble() : 1.0,
-              onChanged: (val) => _audio.seek(Duration(seconds: val.toInt())),
+              value: currentValue,
+              max: maxValue,
+              onChanged: (val) {
+                _audio.seek(Duration(seconds: val.toInt()));
+                setState(() => _position = Duration(seconds: val.toInt()));
+              },
             ),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -162,6 +188,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       await _audio.pause();
                     } else {
                       _isStoppedByUser = false;
+                      if (_position.inSeconds >= _duration.inSeconds && _duration.inSeconds > 0) {
+                        await _audio.seek(Duration.zero);
+                      }
                       await _audio.resume();
                     }
                   },

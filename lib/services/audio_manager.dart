@@ -1,10 +1,27 @@
+import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
 import '../models/song.dart';
 
 class AudioManager {
   static final AudioManager _instance = AudioManager._internal();
   factory AudioManager() => _instance;
-  AudioManager._internal();
+  AudioManager._internal() {
+    // Lắng nghe các stream từ AudioPlayer và chuyển tiếp qua StreamController
+    _player.onPositionChanged.listen((pos) {
+      _currentPosition = pos;
+      _positionController.add(pos);
+    });
+    _player.onDurationChanged.listen((dur) {
+      _currentDuration = dur;
+      _durationController.add(dur);
+    });
+    _player.onPlayerStateChanged.listen((state) {
+      _playerStateController.add(state);
+    });
+    _player.onPlayerComplete.listen((_) {
+      _playerCompleteController.add(null);
+    });
+  }
 
   final AudioPlayer _player = AudioPlayer();
   String? _currentPath;
@@ -14,10 +31,25 @@ class AudioManager {
   List<Song>? _playlist;
   int _currentIndex = 0;
 
-  // Streams
-  Stream<Duration> get positionStream => _player.onPositionChanged;
-  Stream<Duration> get durationStream => _player.onDurationChanged;
-  Stream<PlayerState> get playerStateStream => _player.onPlayerStateChanged;
+  // Lưu giá trị position và duration hiện tại (cập nhật từ stream)
+  Duration _currentPosition = Duration.zero;
+  Duration _currentDuration = Duration.zero;
+
+  // StreamControllers
+  final _positionController = StreamController<Duration>.broadcast();
+  final _durationController = StreamController<Duration>.broadcast();
+  final _playerStateController = StreamController<PlayerState>.broadcast();
+  final _playerCompleteController = StreamController<void>.broadcast();
+
+  // Public streams
+  Stream<Duration> get positionStream => _positionController.stream;
+  Stream<Duration> get durationStream => _durationController.stream;
+  Stream<PlayerState> get playerStateStream => _playerStateController.stream;
+  Stream<void> get playerCompleteStream => _playerCompleteController.stream;
+
+  // Getters đồng bộ
+  Duration get currentPosition => _currentPosition;
+  Duration get currentDuration => _currentDuration;
 
   bool get isPlaying => _player.state == PlayerState.playing;
   bool get hasSong => _currentPath != null;
@@ -25,6 +57,8 @@ class AudioManager {
   String? get title => _currentTitle;
   String? get artist => _currentArtist;
   String? get thumbnail => _currentThumbnail;
+  List<Song>? get playlist => _playlist;
+  int get currentIndex => _currentIndex;
 
   Song? get currentSong {
     if (_currentPath == null || _playlist == null) return null;
@@ -41,6 +75,10 @@ class AudioManager {
   }
 
   Future<void> play(Song song) async {
+    if (_currentPath == song.localPath && _player.state == PlayerState.playing) {
+      return;
+    }
+
     _currentPath = song.localPath;
     _currentTitle = song.title;
     _currentArtist = song.artist;
@@ -84,7 +122,18 @@ class AudioManager {
     _currentThumbnail = null;
     _playlist = null;
     _currentIndex = 0;
+    _currentPosition = Duration.zero;
+    _currentDuration = Duration.zero;
   }
-  Future<void> seek(Duration position) async => _player.seek(position);
-  void dispose() => _player.dispose();
+  Future<void> seek(Duration position) async {
+    await _player.seek(position);
+    _currentPosition = position; // cập nhật ngay
+  }
+  void dispose() {
+    _player.dispose();
+    _positionController.close();
+    _durationController.close();
+    _playerStateController.close();
+    _playerCompleteController.close();
+  }
 }
