@@ -7,11 +7,11 @@ class SongItem extends StatelessWidget {
   final VoidCallback? onLongPress;
 
   const SongItem({
-    Key? key,
+    super.key,
     required this.song,
     required this.onTap,
     this.onLongPress,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

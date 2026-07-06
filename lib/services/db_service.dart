@@ -3,7 +3,6 @@ import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import '../models/song.dart';
-import '../models/song.dart';
 
 class DatabaseService {
   static final DatabaseService _instance = DatabaseService._internal();
@@ -38,7 +37,6 @@ class DatabaseService {
     );
   }
 
-  // Thêm bài hát (nếu đã tồn tại local_path thì bỏ qua)
   Future<int> insertSong(Song song) async {
     final db = await database;
     return await db.insert(
@@ -48,20 +46,17 @@ class DatabaseService {
     );
   }
 
-  // Lấy tất cả bài hát
   Future<List<Song>> getAllSongs() async {
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query('songs');
     return maps.map((map) => Song.fromMap(map)).toList();
   }
 
-  // Xoá bài hát theo id
   Future<int> deleteSong(int id) async {
     final db = await database;
     return await db.delete('songs', where: 'id = ?', whereArgs: [id]);
   }
 
-  // Tìm kiếm theo tên (gần đúng)
   Future<List<Song>> searchSongs(String keyword) async {
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query(

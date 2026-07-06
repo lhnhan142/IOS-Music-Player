@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import '../models/song.dart';
 import '../services/db_service.dart';
 import '../services/yt_service.dart';
+import '../services/audio_manager.dart';
 import '../widgets/song_item.dart';
 import 'player_screen.dart';
-
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -20,6 +21,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final FocusNode _searchFocusNode = FocusNode();
   final YoutubeService _ytService = YoutubeService();
   final DatabaseService _db = DatabaseService();
+  final AudioManager _audio = AudioManager();
   List<Song> _songs = [];
   bool _isLoading = false;
   Timer? _debounceTimer;
@@ -55,37 +57,28 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() => _isLoading = true);
     try {
-      final videos = await _ytService.fetchVideosFromLink(url);
-      List<Song> downloaded = [];
-
-      if (videos.length == 1) {
-        final video = videos.first;
-        final path = await _ytService.downloadAudio(video['id'], video['title']);
-        final song = Song(
-          title: video['title'],
-          localPath: path,
-          artist: video['artist'],
-          thumbnailUrl: video['thumbnail'],
-        );
-        await _db.insertSong(song);
-        downloaded = [song];
-      } else {
-        downloaded = await _ytService.downloadPlaylist(url, (current, total) {
+      // Gọi hàm tải cũ (tuần tự, không song song)
+      final downloaded = await _ytService.downloadPlaylist(
+        url,
+            (current, total) {
           print('Đã tải $current/$total');
-        });
-        for (var song in downloaded) {
-          await _db.insertSong(song);
-        }
-      }
+        },
+      );
 
+      // Lưu vào database
+      for (var song in downloaded) {
+        await _db.insertSong(song);
+      }
       await _loadSongs();
       _urlController.clear();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Đã tải ${downloaded.length} bài thành công')),
+      );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi: $e')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi: $e')),
+      );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -98,9 +91,7 @@ class _HomeScreenState extends State<HomeScreen> {
         await _loadSongs();
       } else {
         final results = await _db.searchSongs(keyword);
-        if (mounted) {
-          setState(() => _songs = results);
-        }
+        if (mounted) setState(() => _songs = results);
       }
     });
   }
@@ -159,28 +150,118 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _songs.isEmpty
-          ? const Center(child: Text('Chưa có bài hát nào. Hãy tải từ YouTube!'))
-          : ListView.builder(
-        itemCount: _songs.length,
-        itemBuilder: (ctx, i) => SongItem(
-          song: _songs[i],
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => PlayerScreen(
-                  songs: _songs,
-                  initialIndex: i,
-                ),
-              ),
-            );
-          },
-          onLongPress: () => _deleteSong(_songs[i]),
-        ),
+      body: Stack(
+        children: [
+          _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _songs.isEmpty
+              ? const Center(child: Text('Chưa có bài hát nào. Hãy tải từ YouTube!'))
+              : ListView.builder(
+            padding: const EdgeInsets.only(bottom: 80),
+            itemCount: _songs.length,
+            itemBuilder: (ctx, i) => SongItem(
+              song: _songs[i],
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => PlayerScreen(
+                      songs: _songs,
+                      initialIndex: i,
+                    ),
+                  ),
+                );
+              },
+              onLongPress: () => _deleteSong(_songs[i]),
+            ),
+          ),
+          _buildMiniPlayer(),
+        ],
       ),
+    );
+  }
+
+  Widget _buildMiniPlayer() {
+    return StreamBuilder<PlayerState>(
+      stream: _audio.playerStateStream,
+      builder: (context, snapshot) {
+        final state = snapshot.data;
+        if (state == null || state == PlayerState.stopped || !_audio.hasSong) {
+          return const SizedBox.shrink();
+        }
+
+        final isPlaying = state == PlayerState.playing;
+        final title = _audio.title ?? '';
+        final artist = _audio.artist ?? '';
+        final thumbnail = _audio.thumbnail;
+
+        return Positioned(
+          bottom: 0,
+          left: 0,
+          right: 0,
+          child: GestureDetector(
+            onTap: () {
+              final currentSong = _audio.currentSong;
+              if (currentSong != null) {
+                final index = _songs.indexOf(currentSong);
+                if (index != -1) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PlayerScreen(
+                        songs: _songs,
+                        initialIndex: index,
+                      ),
+                    ),
+                  );
+                }
+              }
+            },
+            child: Container(
+              height: 70,
+              color: Colors.black87,
+              child: Row(
+                children: [
+                  const SizedBox(width: 8),
+                  thumbnail != null
+                      ? Image.network(thumbnail, width: 50, height: 50, fit: BoxFit.cover)
+                      : const Icon(Icons.music_note, size: 50, color: Colors.white),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title, style: const TextStyle(color: Colors.white, fontSize: 14),
+                            overflow: TextOverflow.ellipsis),
+                        Text(artist, style: const TextStyle(color: Colors.grey, fontSize: 12),
+                            overflow: TextOverflow.ellipsis),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white),
+                    onPressed: () {
+                      if (isPlaying) {
+                        _audio.pause();
+                      } else {
+                        _audio.resume();
+                      }
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.skip_next, color: Colors.white),
+                    onPressed: () {
+                      _audio.next();
+                    },
+                  ),
+                  const SizedBox(width: 4),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

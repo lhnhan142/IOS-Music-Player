@@ -1,9 +1,9 @@
 class Song {
   int? id;
   String title;
-  String localPath;      // đường dẫn file .m4a
-  String? artist;        // tên kênh/tác giả
-  String? thumbnailUrl;  // ảnh bìa (có thể lấy từ YouTube)
+  String localPath;
+  String? artist;
+  String? thumbnailUrl;
 
   Song({
     this.id,
@@ -13,7 +13,6 @@ class Song {
     this.thumbnailUrl,
   });
 
-  // Chuyển đổi từ Map (đọc từ DB)
   factory Song.fromMap(Map<String, dynamic> map) {
     return Song(
       id: map['id'],
@@ -24,7 +23,6 @@ class Song {
     );
   }
 
-  // Chuyển sang Map (ghi vào DB)
   Map<String, dynamic> toMap() {
     return {
       'title': title,
