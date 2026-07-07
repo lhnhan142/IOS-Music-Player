@@ -139,4 +139,18 @@ class AudioManager {
     _playerStateController.close();
     _playerCompleteController.close();
   }
+
+  void updatePlaylist(List<Song> newPlaylist, {int? currentIndex}) {
+    _playlist = newPlaylist;
+    if (currentIndex != null && currentIndex < newPlaylist.length) {
+      _currentIndex = currentIndex;
+    } else {
+      // Nếu không truyền index, giữ nguyên index hiện tại (nếu có)
+      if (_currentIndex >= newPlaylist.length) {
+        _currentIndex = newPlaylist.length - 1;
+        if (_currentIndex < 0) _currentIndex = 0;
+      }
+    }
+    // Nếu currentIndex vượt quá, đặt về 0
+  }
 }

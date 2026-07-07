@@ -1,14 +1,36 @@
 import 'dart:async';
-
+import 'dart:io';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:path_provider/path_provider.dart';
-import 'dart:io';
 import '../models/song.dart';
 
 class YoutubeService {
   final yt = YoutubeExplode();
 
-  // Lấy danh sách video từ link (hỗ trợ video đơn hoặc playlist)
+  // 🔍 Tìm kiếm từ khóa
+  Future<List<Map<String, dynamic>>> searchYoutube(String query) async {
+    try {
+      final searchResults = await yt.search.search(query).timeout(const Duration(seconds: 15));
+      final topResults = searchResults.take(5).toList();
+
+      return topResults.map((video) {
+        return {
+          'id': video.id.value,
+          'title': video.title,
+          'artist': video.author,
+          'thumbnail': 'https://img.youtube.com/vi/${video.id.value}/hqdefault.jpg',
+        };
+      }).toList();
+    } on SocketException catch (_) {
+      throw Exception('Không có kết nối internet. Vui lòng kiểm tra lại mạng.');
+    } on TimeoutException catch (_) {
+      throw Exception('Kết nối mạng quá yếu. Đã hết thời gian chờ.');
+    } catch (e) {
+      throw Exception('Lỗi hệ thống: $e');
+    }
+  }
+
+  // 📋 Lấy danh sách video từ link (hỗ trợ video đơn hoặc playlist)
   Future<List<Map<String, dynamic>>> fetchVideosFromLink(String link) async {
     try {
       if (link.contains('list=')) {
@@ -33,15 +55,16 @@ class YoutubeService {
           }
         ];
       }
+    } on SocketException catch (_) {
+      throw Exception('Không có kết nối internet. Vui lòng kiểm tra lại mạng.');
     } on TimeoutException catch (_) {
-      throw Exception('Kết nối quá chậm, vui lòng thử lại sau.');
+      throw Exception('Kết nối mạng quá yếu. Đã hết thời gian chờ.');
     } catch (e) {
-      print('Lỗi fetchVideosFromLink: $e');
-      rethrow;
+      throw Exception('Lỗi hệ thống: $e');
     }
   }
 
-  // Tải một bài hát: lấy muxed (video+audio) để có container MP4 chắc chắn
+  // ⬇️ Tải một bài hát (dùng muxed stream)
   Future<String> downloadAudio(String videoId, String title) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
@@ -50,30 +73,24 @@ class YoutubeService {
       final file = File(filePath);
 
       if (await file.exists()) {
-        print('File đã tồn tại: $filePath');
         return filePath;
       }
 
       final manifest = await yt.videos.streamsClient.getManifest(videoId).timeout(const Duration(seconds: 20));
-
-      // Lấy luồng muxed (video + audio) – luôn có container MP4
       final muxedStreams = manifest.muxed.toList();
       if (muxedStreams.isEmpty) {
-        // Fallback: audioOnly
-        final audioOnly = manifest.audioOnly.withHighestBitrate();
-        if (audioOnly == null) throw Exception('Không tìm thấy luồng audio');
-        print('Fallback dùng audioOnly: container=${audioOnly.container}');
-        return await _downloadStream(audioOnly, filePath);
+        throw Exception('Không tìm thấy luồng muxed cho video này.');
       }
-
-      // Sắp xếp theo bitrate tăng dần, chọn luồng thấp nhất để file nhẹ
       muxedStreams.sort((a, b) => a.bitrate.compareTo(b.bitrate));
       final streamInfo = muxedStreams.first;
-      print('Đang tải muxed: ${streamInfo.bitrate} kbps, container: ${streamInfo.container}');
+
       return await _downloadStream(streamInfo, filePath);
+    } on SocketException catch (_) {
+      throw Exception('Đã mất kết nối mạng trong quá trình tải.');
+    } on TimeoutException catch (_) {
+      throw Exception('Mạng quá chậm, quá trình tải bị gián đoạn.');
     } catch (e) {
-      print('Lỗi downloadAudio: $e');
-      rethrow;
+      throw Exception('Lỗi tải nhạc: $e');
     }
   }
 
@@ -85,11 +102,13 @@ class YoutubeService {
     await stream.pipe(sink);
     await sink.close();
     final size = await file.length();
-    if (size == 0) throw Exception('File rỗng');
+    if (size == 0) {
+      throw Exception('File tải về rỗng.');
+    }
     return filePath;
   }
 
-  // Tải playlist (tuần tự, mỗi bài cách nhau 2 giây)
+  // 📦 Tải playlist (tuần tự)
   Future<List<Song>> downloadPlaylist(String link, Function(int, int) onProgress) async {
     final videos = await fetchVideosFromLink(link);
     final List<Song> downloaded = [];
