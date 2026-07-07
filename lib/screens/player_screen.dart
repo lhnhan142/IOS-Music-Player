@@ -31,6 +31,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _autoNext = true;
   bool _isStoppedByUser = false;
 
+  // ✅ Thêm biến tốc độ phát
+  double _playbackRate = 1.0;
+
   @override
   void initState() {
     super.initState();
@@ -140,6 +143,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
   }
 
+  // ✅ Hàm chọn tốc độ
+  void _togglePlaybackRate() {
+    setState(() {
+      if (_playbackRate == 1.0) {
+        _playbackRate = 1.25;
+      } else if (_playbackRate == 1.25) {
+        _playbackRate = 1.5;
+      } else if (_playbackRate == 1.5) {
+        _playbackRate = 2.0;
+      } else if (_playbackRate == 2.0) {
+        _playbackRate = 0.75;
+      } else {
+        _playbackRate = 1.0;
+      }
+      _audio.setPlaybackRate(_playbackRate);
+    });
+  }
+
   IconData _getRepeatIcon() {
     switch (_repeatMode) {
       case RepeatMode.none:
@@ -168,7 +189,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Thumbnail với cache
             _currentSong.thumbnailUrl != null
                 ? cached.CachedNetworkImage(
               imageUrl: _currentSong.thumbnailUrl!,
@@ -183,7 +203,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Text(_currentSong.artist ?? '', style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 20),
 
-            // Slider + thời gian chỉ rebuild khi stream có dữ liệu
             StreamBuilder<Duration>(
               stream: _audio.positionStream,
               builder: (context, snapshot) {
@@ -213,6 +232,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
+                // ✅ Nút tốc độ phát
+                TextButton(
+                  onPressed: _togglePlaybackRate,
+                  child: Text(
+                    '${_playbackRate}x',
+                    style: const TextStyle(color: Colors.cyan, fontSize: 16),
+                  ),
+                ),
+                const SizedBox(width: 4),
                 IconButton(
                   icon: Icon(_getRepeatIcon()),
                   onPressed: _toggleRepeat,
