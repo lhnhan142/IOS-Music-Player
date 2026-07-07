@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import '../models/song.dart';
@@ -7,7 +8,6 @@ import '../services/yt_service.dart';
 import '../services/audio_manager.dart';
 import '../widgets/song_item.dart';
 import 'player_screen.dart';
-import 'dart:developer';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -45,14 +45,26 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadSongs() async {
     final songs = await _db.getAllSongs();
-    setState(() => _songs = songs);
+    final validSongs = <Song>[];
+    for (var song in songs) {
+      final file = File(song.localPath);
+      if (await file.exists()) {
+        validSongs.add(song);
+      } else {
+        await _db.deleteSong(song.id!);
+        print('Xóa bài ${song.title} do file không tồn tại');
+      }
+    }
+    if (mounted) setState(() => _songs = validSongs);
   }
 
   Future<void> _downloadAndSave(String url) async {
     if (url.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Vui lòng nhập link YouTube')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Vui lòng nhập link YouTube')),
+        );
+      }
       return;
     }
 
@@ -61,8 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final downloaded = await _ytService.downloadPlaylist(
         url,
             (current, total) {
-          // Có thể hiển thị tiến độ ở đây
-          debugPrint('Đã tải $current/$total');
+          print('Đã tải $current/$total');
         },
       );
 
@@ -72,13 +83,17 @@ class _HomeScreenState extends State<HomeScreen> {
       await _loadSongs();
       _urlController.clear();
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Đã tải ${downloaded.length} bài thành công')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đã tải ${downloaded.length} bài thành công')),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Lỗi: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi: $e')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -162,7 +177,6 @@ class _HomeScreenState extends State<HomeScreen> {
             itemBuilder: (ctx, i) => SongItem(
               song: _songs[i],
               onTap: () {
-                // Nếu đang có bài phát, mở với playlist và index hiện tại của AudioManager
                 if (_audio.hasSong && _audio.playlist != null) {
                   Navigator.push(
                     context,
@@ -174,7 +188,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   );
                 } else {
-                  // Chưa có bài, mở với bài được chọn
                   Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -226,7 +239,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 );
               } else {
-                // Nếu không có bài, mở với bài đầu tiên nếu có
                 if (_songs.isNotEmpty) {
                   Navigator.push(
                     context,

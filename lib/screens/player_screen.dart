@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import '../models/song.dart';
@@ -27,9 +29,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   bool _isPlaying = false;
+  bool _isDragging = false; // Để ngăn stream ghi đè slider khi kéo
+
   RepeatMode _repeatMode = RepeatMode.none;
   bool _autoNext = true;
   bool _isStoppedByUser = false;
+
+  // Lưu các subscription để hủy
+  StreamSubscription? _positionSub;
+  StreamSubscription? _durationSub;
+  StreamSubscription? _stateSub;
+  StreamSubscription? _completeSub;
 
   @override
   void initState() {
@@ -44,14 +54,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _position = _audio.currentPosition;
     _duration = _audio.currentDuration;
 
-    // Lắng nghe stream để cập nhật
-    _audio.positionStream.listen((pos) {
-      if (mounted) setState(() => _position = pos);
+    // Lắng nghe stream và lưu subscription
+    _positionSub = _audio.positionStream.listen((pos) {
+      if (mounted && !_isDragging) {
+        setState(() => _position = pos);
+      }
     });
-    _audio.durationStream.listen((dur) {
+    _durationSub = _audio.durationStream.listen((dur) {
       if (mounted) setState(() => _duration = dur);
     });
-    _audio.playerStateStream.listen((state) {
+    _stateSub = _audio.playerStateStream.listen((state) {
       if (mounted) {
         setState(() => _isPlaying = state == PlayerState.playing);
         if (state != PlayerState.stopped && state != PlayerState.completed) {
@@ -59,7 +71,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         }
       }
     });
-    _audio.playerCompleteStream.listen((_) {
+    _completeSub = _audio.playerCompleteStream.listen((_) {
       if (mounted && !_isStoppedByUser) {
         _handleSongEnd();
       }
@@ -79,7 +91,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
-    // Không dispose AudioManager (dùng toàn cục)
+    // Hủy các subscription để tránh leak và setState sau dispose
+    _positionSub?.cancel();
+    _durationSub?.cancel();
+    _stateSub?.cancel();
+    _completeSub?.cancel();
     super.dispose();
   }
 
@@ -125,7 +141,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     }
     setState(() => _currentIndex = newIndex);
-    await _audio.play(widget.songs[_currentIndex]);
+    try {
+      await _audio.play(widget.songs[_currentIndex]);
+    } catch (e) {
+      // File không tồn tại, xóa khỏi danh sách hoặc thông báo
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi phát nhạc: $e')),
+      );
+    }
   }
 
   void _toggleAutoNext() => setState(() => _autoNext = !_autoNext);
@@ -168,8 +191,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
               value: currentValue,
               max: maxValue,
               onChanged: (val) {
+                setState(() {
+                  _isDragging = true;
+                  _position = Duration(seconds: val.toInt());
+                });
+              },
+              onChangeStart: (_) {
+                setState(() => _isDragging = true);
+              },
+              onChangeEnd: (val) {
+                setState(() => _isDragging = false);
                 _audio.seek(Duration(seconds: val.toInt()));
-                setState(() => _position = Duration(seconds: val.toInt()));
               },
             ),
             Row(

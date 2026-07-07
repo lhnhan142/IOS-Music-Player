@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import '../models/song.dart';
 
@@ -6,7 +7,7 @@ class AudioManager {
   static final AudioManager _instance = AudioManager._internal();
   factory AudioManager() => _instance;
   AudioManager._internal() {
-    // Lắng nghe các stream từ AudioPlayer và chuyển tiếp qua StreamController
+    // Lắng nghe stream từ AudioPlayer và chuyển tiếp
     _player.onPositionChanged.listen((pos) {
       _currentPosition = pos;
       _positionController.add(pos);
@@ -31,11 +32,11 @@ class AudioManager {
   List<Song>? _playlist;
   int _currentIndex = 0;
 
-  // Lưu giá trị position và duration hiện tại (cập nhật từ stream)
+  // Lưu giá trị hiện tại
   Duration _currentPosition = Duration.zero;
   Duration _currentDuration = Duration.zero;
 
-  // StreamControllers
+  // Stream Controllers
   final _positionController = StreamController<Duration>.broadcast();
   final _durationController = StreamController<Duration>.broadcast();
   final _playerStateController = StreamController<PlayerState>.broadcast();
@@ -47,10 +48,9 @@ class AudioManager {
   Stream<PlayerState> get playerStateStream => _playerStateController.stream;
   Stream<void> get playerCompleteStream => _playerCompleteController.stream;
 
-  // Getters đồng bộ
+  // Getters
   Duration get currentPosition => _currentPosition;
   Duration get currentDuration => _currentDuration;
-
   bool get isPlaying => _player.state == PlayerState.playing;
   bool get hasSong => _currentPath != null;
 
@@ -75,8 +75,14 @@ class AudioManager {
   }
 
   Future<void> play(Song song) async {
+    // Kiểm tra file có tồn tại không
+    final file = File(song.localPath);
+    if (!await file.exists()) {
+      throw Exception('File không tồn tại: ${song.localPath}');
+    }
+
     if (_currentPath == song.localPath && _player.state == PlayerState.playing) {
-      return;
+      return; // Đang phát bài này rồi
     }
 
     _currentPath = song.localPath;
@@ -90,7 +96,7 @@ class AudioManager {
     }
 
     try {
-      await _player.stop();
+      await _player.stop(); // Dừng bài cũ
       await _player.setSource(DeviceFileSource(song.localPath));
       await _player.resume();
     } catch (e) {
