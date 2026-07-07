@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:developer'; // cho debugPrint
+import 'package:flutter/cupertino.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/song.dart';
@@ -7,12 +9,11 @@ import '../models/song.dart';
 class YoutubeService {
   final yt = YoutubeExplode();
 
-  // 🔍 Tìm kiếm từ khóa
+  // 🔍 Tìm kiếm
   Future<List<Map<String, dynamic>>> searchYoutube(String query) async {
     try {
       final searchResults = await yt.search.search(query).timeout(const Duration(seconds: 15));
       final topResults = searchResults.take(5).toList();
-
       return topResults.map((video) {
         return {
           'id': video.id.value,
@@ -30,7 +31,7 @@ class YoutubeService {
     }
   }
 
-  // 📋 Lấy danh sách video từ link (hỗ trợ video đơn hoặc playlist)
+  // 📋 Lấy video từ link
   Future<List<Map<String, dynamic>>> fetchVideosFromLink(String link) async {
     try {
       if (link.contains('list=')) {
@@ -64,8 +65,12 @@ class YoutubeService {
     }
   }
 
-  // ⬇️ Tải một bài hát (dùng muxed stream)
-  Future<String> downloadAudio(String videoId, String title) async {
+  // ⬇️ Tải audio với callback tiến độ
+  Future<String> downloadAudio(
+      String videoId,
+      String title, {
+        Function(double)? onProgress,
+      }) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
       String safeTitle = title.replaceAll(RegExp(r'[^\w\s]'), '').replaceAll(' ', '_');
@@ -84,7 +89,7 @@ class YoutubeService {
       muxedStreams.sort((a, b) => a.bitrate.compareTo(b.bitrate));
       final streamInfo = muxedStreams.first;
 
-      return await _downloadStream(streamInfo, filePath);
+      return await _downloadStream(streamInfo, filePath, onProgress: onProgress);
     } on SocketException catch (_) {
       throw Exception('Đã mất kết nối mạng trong quá trình tải.');
     } on TimeoutException catch (_) {
@@ -94,12 +99,29 @@ class YoutubeService {
     }
   }
 
-  // Hàm ghi stream vào file
-  Future<String> _downloadStream(StreamInfo streamInfo, String filePath) async {
+  // Hàm ghi stream với tính năng tiến độ
+  Future<String> _downloadStream(
+      StreamInfo streamInfo,
+      String filePath, {
+        Function(double)? onProgress,
+      }) async {
     final file = File(filePath);
     final stream = yt.videos.streamsClient.get(streamInfo);
     final sink = file.openWrite();
-    await stream.pipe(sink);
+
+    // ✅ Sửa lỗi: dùng totalBytes thay vì bytes
+    final totalBytes = streamInfo.size?.totalBytes ?? 0;
+    int downloadedBytes = 0;
+
+    await for (final data in stream) {
+      downloadedBytes += data.length;
+      sink.add(data);
+      if (totalBytes > 0 && onProgress != null) {
+        final progress = downloadedBytes / totalBytes;
+        onProgress(progress.clamp(0.0, 1.0));
+      }
+    }
+
     await sink.close();
     final size = await file.length();
     if (size == 0) {
@@ -108,7 +130,7 @@ class YoutubeService {
     return filePath;
   }
 
-  // 📦 Tải playlist (tuần tự)
+  // 📦 Tải playlist (giữ nguyên, không có progress chi tiết)
   Future<List<Song>> downloadPlaylist(String link, Function(int, int) onProgress) async {
     final videos = await fetchVideosFromLink(link);
     final List<Song> downloaded = [];
@@ -125,7 +147,7 @@ class YoutubeService {
         ));
         onProgress(i + 1, total);
       } catch (e) {
-        print('Lỗi tải bài ${v['title']}: $e');
+        debugPrint('Lỗi tải bài ${v['title']}: $e');
       }
       if (i < total - 1) await Future.delayed(const Duration(seconds: 2));
     }

@@ -25,13 +25,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late int _currentIndex;
   Song get _currentSong => widget.songs[_currentIndex];
 
+  Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   bool _isPlaying = false;
   RepeatMode _repeatMode = RepeatMode.none;
   bool _autoNext = true;
   bool _isStoppedByUser = false;
-
-  // ✅ Thêm biến tốc độ phát
   double _playbackRate = 1.0;
 
   @override
@@ -39,14 +38,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
     super.initState();
     _currentIndex = widget.initialIndex;
 
+    // ✅ Lấy giá trị hiện tại từ AudioManager ngay lập tức
+    _position = _audio.currentPosition;
+    _duration = _audio.currentDuration;
+
     if (_audio.playlist == null || _audio.playlist!.isEmpty) {
       _audio.setPlaylist(widget.songs, _currentIndex);
     }
 
+    _audio.positionStream.listen((pos) {
+      if (mounted) setState(() => _position = pos);
+    });
     _audio.durationStream.listen((dur) {
       if (mounted) setState(() => _duration = dur);
     });
-
     _audio.playerStateStream.listen((state) {
       if (mounted) {
         setState(() => _isPlaying = state == PlayerState.playing);
@@ -55,7 +60,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
         }
       }
     });
-
     _audio.playerCompleteStream.listen((_) {
       if (mounted && !_isStoppedByUser) {
         _handleSongEnd();
@@ -78,6 +82,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _handleSongEnd() async {
+    // ✅ Nếu duration = 0 (chưa load xong) thì không xử lý
+    if (_duration == Duration.zero) return;
+
     if (_repeatMode == RepeatMode.one) {
       await _audio.seek(Duration.zero);
       await _audio.resume();
@@ -143,7 +150,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
   }
 
-  // ✅ Hàm chọn tốc độ
   void _togglePlaybackRate() {
     setState(() {
       if (_playbackRate == 1.0) {
@@ -181,6 +187,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   Widget build(BuildContext context) {
     final double maxValue = _duration.inSeconds.toDouble() > 1 ? _duration.inSeconds.toDouble() : 1.0;
+    final double currentValue = _position.inSeconds.toDouble().clamp(0, maxValue);
 
     return Scaffold(
       appBar: AppBar(title: Text(_currentSong.title)),
@@ -232,7 +239,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // ✅ Nút tốc độ phát
                 TextButton(
                   onPressed: _togglePlaybackRate,
                   child: Text(

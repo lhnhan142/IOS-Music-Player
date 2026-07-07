@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:audioplayers/audioplayers.dart'; // ✅ Import cho PlayerState
+import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/song.dart';
 import '../services/db_service.dart';
@@ -44,7 +44,6 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  // 🔄 Tải danh sách, kiểm tra file tồn tại
   Future<void> _loadSongs() async {
     final songs = await _db.getAllSongs();
     final validSongs = <Song>[];
@@ -63,7 +62,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _audio.updatePlaylist(validSongs);
   }
 
-  // 📥 Xử lý đầu vào (link hay từ khóa)
+  // 📥 Xử lý đầu vào
   Future<void> _handleInput(String input) async {
     if (input.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -126,33 +125,59 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // ⬇️ Tải một video đơn (từ kết quả tìm kiếm)
+  // ⬇️ Tải một video đơn (có progress)
   Future<void> _downloadSingleVideo(Map<String, dynamic> video) async {
-    setState(() => _isLoading = true);
+    // 1. Tạo bài hát ảo với trạng thái đang tải
+    final downloadingSong = Song(
+      title: video['title'],
+      localPath: '',
+      artist: video['artist'],
+      thumbnailUrl: video['thumbnail'],
+      isDownloading: true,
+      downloadProgress: 0.0,
+    );
+
+    // 2. Chèn vào đầu danh sách để hiển thị ngay
+    setState(() {
+      _songs.insert(0, downloadingSong);
+    });
+
     try {
-      final path = await _ytService.downloadAudio(video['id'], video['title']);
-      final song = Song(
-        title: video['title'],
-        localPath: path,
-        artist: video['artist'],
-        thumbnailUrl: video['thumbnail'],
+      // 3. Gọi tải với callback tiến độ
+      final path = await _ytService.downloadAudio(
+        video['id'],
+        video['title'],
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() {
+              downloadingSong.downloadProgress = progress;
+            });
+          }
+        },
       );
-      await _db.insertSong(song);
-      await _loadSongs();
+
+      // 4. Tải xong: cập nhật và lưu DB
+      downloadingSong.localPath = path;
+      downloadingSong.isDownloading = false;
+      await _db.insertSong(downloadingSong);
+      await _loadSongs(); // reload để có ID và đồng bộ
       _urlController.clear();
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Đã tải thành công: ${video['title']}')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đã tải thành công: ${video['title']}')),
+        );
+      }
     } catch (e) {
+      // 5. Lỗi: xóa bài ảo khỏi danh sách
+      setState(() {
+        _songs.remove(downloadingSong);
+      });
       if (mounted) _showErrorSnackBar(e);
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // 📥 Tải từ link (hỗ trợ playlist)
+  // 📥 Tải từ link (playlist) - không có progress chi tiết
   Future<void> _downloadAndSave(String url) async {
     if (url.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -188,7 +213,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // 🛑 Hiển thị lỗi đẹp
   void _showErrorSnackBar(dynamic error) {
     final message = error.toString().replaceAll('Exception: ', '');
     ScaffoldMessenger.of(context).showSnackBar(
@@ -200,7 +224,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 🔍 Tìm kiếm trong thư viện với debounce
+  // 🔍 Tìm kiếm trong thư viện (debounce)
   Future<void> _search(String keyword) async {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 500), () async {
@@ -213,7 +237,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  // 🗑️ Xóa bài: xác nhận + xóa file + cập nhật playlist
+  // 🗑️ Xóa bài
   Future<bool> _deleteSong(Song song) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -235,10 +259,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirm != true) return false;
 
-    // 1. Xóa DB
     await _db.deleteSong(song.id!);
-
-    // 2. Xóa file vật lý
     try {
       final file = File(song.localPath);
       if (await file.exists()) {
@@ -248,10 +269,7 @@ class _HomeScreenState extends State<HomeScreen> {
       debugPrint('Lỗi xóa file: $e');
     }
 
-    // 3. Lấy danh sách mới
     final newSongs = _songs.where((s) => s.id != song.id).toList();
-
-    // 4. Xử lý nếu bài đang phát bị xóa
     final currentSong = _audio.currentSong;
     if (currentSong != null && currentSong.id == song.id) {
       if (newSongs.isNotEmpty) {
@@ -266,9 +284,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _audio.updatePlaylist(newSongs);
     }
 
-    // 5. Cập nhật UI
     setState(() => _songs = newSongs);
-
     return true;
   }
 
@@ -293,13 +309,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           border: OutlineInputBorder(),
                           contentPadding: EdgeInsets.symmetric(horizontal: 12),
                         ),
-                        enabled: !_isLoading,
+                        // ✅ Bỏ enabled: !_isLoading để không khóa UI khi tải playlist
                         onSubmitted: _handleInput,
                       ),
                     ),
                     const SizedBox(width: 8),
                     IconButton(
                       icon: const Icon(Icons.download),
+                      // ✅ Nút vẫn hoạt động khi tải, chỉ disable nếu đang tải playlist
                       onPressed: _isLoading ? null : () => _handleInput(_urlController.text),
                     ),
                   ],
@@ -333,7 +350,7 @@ class _HomeScreenState extends State<HomeScreen> {
             itemBuilder: (ctx, i) {
               final song = _songs[i];
               return Dismissible(
-                key: Key(song.id.toString()),
+                key: Key(song.id?.toString() ?? '${DateTime.now()}'),
                 direction: DismissDirection.endToStart,
                 background: Container(
                   color: Colors.red,
@@ -342,6 +359,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: const Icon(Icons.delete, color: Colors.white),
                 ),
                 confirmDismiss: (direction) async {
+                  // Không cho xóa nếu đang tải
+                  if (song.isDownloading) return false;
                   return await _deleteSong(song);
                 },
                 child: SongItem(
@@ -367,7 +386,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 🎵 Mini player
   Widget _buildMiniPlayer() {
     return StreamBuilder<PlayerState>(
       stream: _audio.playerStateStream,

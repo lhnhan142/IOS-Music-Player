@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/cupertino.dart';
 import '../models/song.dart';
 
 class AudioManager {
@@ -69,6 +70,18 @@ class AudioManager {
     _currentIndex = initialIndex.clamp(0, playlist.length - 1);
   }
 
+  void updatePlaylist(List<Song> newPlaylist, {int? currentIndex}) {
+    _playlist = newPlaylist;
+    if (currentIndex != null && currentIndex < newPlaylist.length) {
+      _currentIndex = currentIndex;
+    } else {
+      if (_currentIndex >= newPlaylist.length) {
+        _currentIndex = newPlaylist.length - 1;
+        if (_currentIndex < 0) _currentIndex = 0;
+      }
+    }
+  }
+
   Future<void> play(Song song) async {
     if (_currentPath == song.localPath && _player.state == PlayerState.playing) {
       return;
@@ -89,7 +102,7 @@ class AudioManager {
       await _player.setSource(DeviceFileSource(song.localPath));
       await _player.resume();
     } catch (e) {
-      print('Lỗi phát nhạc: $e');
+      debugPrint('Lỗi phát nhạc: $e');
       rethrow;
     }
   }
@@ -109,7 +122,6 @@ class AudioManager {
 
   Future<void> resume() async => _player.resume();
   Future<void> pause() async => _player.pause();
-
   Future<void> stop() async {
     await _player.stop();
     _currentPath = null;
@@ -121,36 +133,16 @@ class AudioManager {
     _currentPosition = Duration.zero;
     _currentDuration = Duration.zero;
   }
-
   Future<void> seek(Duration position) async {
     await _player.seek(position);
     _currentPosition = position;
   }
-
-  // ✅ THÊM HÀM NÀY để thay đổi tốc độ phát
-  Future<void> setPlaybackRate(double rate) async {
-    await _player.setPlaybackRate(rate);
-  }
-
+  Future<void> setPlaybackRate(double rate) async => _player.setPlaybackRate(rate);
   void dispose() {
     _player.dispose();
     _positionController.close();
     _durationController.close();
     _playerStateController.close();
     _playerCompleteController.close();
-  }
-
-  void updatePlaylist(List<Song> newPlaylist, {int? currentIndex}) {
-    _playlist = newPlaylist;
-    if (currentIndex != null && currentIndex < newPlaylist.length) {
-      _currentIndex = currentIndex;
-    } else {
-      // Nếu không truyền index, giữ nguyên index hiện tại (nếu có)
-      if (_currentIndex >= newPlaylist.length) {
-        _currentIndex = newPlaylist.length - 1;
-        if (_currentIndex < 0) _currentIndex = 0;
-      }
-    }
-    // Nếu currentIndex vượt quá, đặt về 0
   }
 }
