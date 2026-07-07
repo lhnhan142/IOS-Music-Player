@@ -43,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  // Tải danh sách bài hát, kiểm tra file tồn tại
   Future<void> _loadSongs() async {
     final songs = await _db.getAllSongs();
     final validSongs = <Song>[];
@@ -52,12 +53,13 @@ class _HomeScreenState extends State<HomeScreen> {
         validSongs.add(song);
       } else {
         await _db.deleteSong(song.id!);
-        print('Xóa bài ${song.title} do file không tồn tại');
+        debugPrint('Đã xóa bài "${song.title}" do file không tồn tại');
       }
     }
     if (mounted) setState(() => _songs = validSongs);
   }
 
+  // Tải nhạc từ YouTube
   Future<void> _downloadAndSave(String url) async {
     if (url.trim().isEmpty) {
       if (mounted) {
@@ -73,7 +75,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final downloaded = await _ytService.downloadPlaylist(
         url,
             (current, total) {
-          print('Đã tải $current/$total');
+          debugPrint('Đã tải $current/$total');
         },
       );
 
@@ -99,6 +101,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // Tìm kiếm với debounce
   Future<void> _search(String keyword) async {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 500), () async {
@@ -111,6 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  // Xóa bài hát
   Future<void> _deleteSong(Song song) async {
     await _db.deleteSong(song.id!);
     await _loadSongs();
@@ -174,33 +178,38 @@ class _HomeScreenState extends State<HomeScreen> {
               : ListView.builder(
             padding: const EdgeInsets.only(bottom: 80),
             itemCount: _songs.length,
-            itemBuilder: (ctx, i) => SongItem(
-              song: _songs[i],
-              onTap: () {
-                if (_audio.hasSong && _audio.playlist != null) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => PlayerScreen(
-                        songs: _audio.playlist!,
-                        initialIndex: _audio.currentIndex,
+            itemBuilder: (ctx, i) {
+              final song = _songs[i];
+              return Dismissible(
+                key: Key(song.id.toString()),
+                direction: DismissDirection.endToStart,
+                background: Container(
+                  color: Colors.red,
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.only(right: 20.0),
+                  child: const Icon(Icons.delete, color: Colors.white),
+                ),
+                onDismissed: (direction) {
+                  _deleteSong(song);
+                },
+                child: SongItem(
+                  song: song,
+                  onTap: () {
+                    // ✅ LUÔN mở bài được nhấn (không bị kẹt bài đang phát)
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => PlayerScreen(
+                          songs: _songs,
+                          initialIndex: i,
+                        ),
                       ),
-                    ),
-                  );
-                } else {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => PlayerScreen(
-                        songs: _songs,
-                        initialIndex: i,
-                      ),
-                    ),
-                  );
-                }
-              },
-              onLongPress: () => _deleteSong(_songs[i]),
-            ),
+                    );
+                  },
+                  // Đã bỏ onLongPress vì đã có vuốt xóa
+                ),
+              );
+            },
           ),
           _buildMiniPlayer(),
         ],
@@ -208,6 +217,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // Widget mini player ở cuối màn hình
   Widget _buildMiniPlayer() {
     return StreamBuilder<PlayerState>(
       stream: _audio.playerStateStream,
