@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/song.dart';
 import '../services/db_service.dart';
 import '../services/yt_service.dart';
@@ -43,7 +44,6 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  // Tải danh sách bài hát, kiểm tra file tồn tại
   Future<void> _loadSongs() async {
     final songs = await _db.getAllSongs();
     final validSongs = <Song>[];
@@ -59,7 +59,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() => _songs = validSongs);
   }
 
-  // Tải nhạc từ YouTube
   Future<void> _downloadAndSave(String url) async {
     if (url.trim().isEmpty) {
       if (mounted) {
@@ -101,7 +100,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Tìm kiếm với debounce
   Future<void> _search(String keyword) async {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 500), () async {
@@ -114,7 +112,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  // Xóa bài hát
   Future<void> _deleteSong(Song song) async {
     await _db.deleteSong(song.id!);
     await _loadSongs();
@@ -195,7 +192,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: SongItem(
                   song: song,
                   onTap: () {
-                    // ✅ LUÔN mở bài được nhấn (không bị kẹt bài đang phát)
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -206,7 +202,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     );
                   },
-                  // Đã bỏ onLongPress vì đã có vuốt xóa
                 ),
               );
             },
@@ -217,7 +212,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Widget mini player ở cuối màn hình
   Widget _buildMiniPlayer() {
     return StreamBuilder<PlayerState>(
       stream: _audio.playerStateStream,
@@ -269,7 +263,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   const SizedBox(width: 8),
                   thumbnail != null
-                      ? Image.network(thumbnail, width: 50, height: 50, fit: BoxFit.cover)
+                      ? CachedNetworkImage(
+                    imageUrl: thumbnail,
+                    width: 50,
+                    height: 50,
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) =>
+                    const Icon(Icons.music_note, size: 50, color: Colors.white),
+                    errorWidget: (context, url, error) =>
+                    const Icon(Icons.music_note, size: 50, color: Colors.white),
+                  )
                       : const Icon(Icons.music_note, size: 50, color: Colors.white),
                   const SizedBox(width: 12),
                   Expanded(

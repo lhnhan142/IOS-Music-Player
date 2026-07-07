@@ -1,28 +1,33 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/song.dart';
 
 class SongItem extends StatelessWidget {
   final Song song;
   final VoidCallback onTap;
-  final VoidCallback? onLongPress;
 
   const SongItem({
-    super.key,
+    Key? key,
     required this.song,
     required this.onTap,
-    this.onLongPress,
-  });
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
       leading: song.thumbnailUrl != null
-          ? Image.network(song.thumbnailUrl!, width: 50, height: 50)
+          ? CachedNetworkImage(
+        imageUrl: song.thumbnailUrl!,
+        width: 50,
+        height: 50,
+        fit: BoxFit.cover,
+        placeholder: (context, url) => const Icon(Icons.music_note),
+        errorWidget: (context, url, error) => const Icon(Icons.broken_image),
+      )
           : const Icon(Icons.music_note),
       title: Text(song.title),
       subtitle: Text(song.artist ?? 'Unknown'),
       onTap: onTap,
-      onLongPress: onLongPress,
       trailing: IconButton(
         icon: const Icon(Icons.play_arrow),
         onPressed: onTap,

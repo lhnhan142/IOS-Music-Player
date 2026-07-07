@@ -1,7 +1,6 @@
-import 'dart:async';
-
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart' as cached;
 import '../models/song.dart';
 import '../services/audio_manager.dart';
 
@@ -26,20 +25,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late int _currentIndex;
   Song get _currentSong => widget.songs[_currentIndex];
 
-  Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   bool _isPlaying = false;
-  bool _isDragging = false; // Để ngăn stream ghi đè slider khi kéo
-
   RepeatMode _repeatMode = RepeatMode.none;
   bool _autoNext = true;
   bool _isStoppedByUser = false;
-
-  // Lưu các subscription để hủy
-  StreamSubscription? _positionSub;
-  StreamSubscription? _durationSub;
-  StreamSubscription? _stateSub;
-  StreamSubscription? _completeSub;
 
   @override
   void initState() {
@@ -50,20 +40,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _audio.setPlaylist(widget.songs, _currentIndex);
     }
 
-    // Lấy giá trị hiện tại từ AudioManager
-    _position = _audio.currentPosition;
-    _duration = _audio.currentDuration;
-
-    // Lắng nghe stream và lưu subscription
-    _positionSub = _audio.positionStream.listen((pos) {
-      if (mounted && !_isDragging) {
-        setState(() => _position = pos);
-      }
-    });
-    _durationSub = _audio.durationStream.listen((dur) {
+    _audio.durationStream.listen((dur) {
       if (mounted) setState(() => _duration = dur);
     });
-    _stateSub = _audio.playerStateStream.listen((state) {
+
+    _audio.playerStateStream.listen((state) {
       if (mounted) {
         setState(() => _isPlaying = state == PlayerState.playing);
         if (state != PlayerState.stopped && state != PlayerState.completed) {
@@ -71,7 +52,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         }
       }
     });
-    _completeSub = _audio.playerCompleteStream.listen((_) {
+
+    _audio.playerCompleteStream.listen((_) {
       if (mounted && !_isStoppedByUser) {
         _handleSongEnd();
       }
@@ -82,20 +64,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (currentPlaying == null || currentPlaying.localPath != _currentSong.localPath) {
         _audio.play(_currentSong);
       } else {
-        setState(() {
-          _isPlaying = _audio.isPlaying;
-        });
+        setState(() => _isPlaying = _audio.isPlaying);
       }
     });
   }
 
   @override
   void dispose() {
-    // Hủy các subscription để tránh leak và setState sau dispose
-    _positionSub?.cancel();
-    _durationSub?.cancel();
-    _stateSub?.cancel();
-    _completeSub?.cancel();
     super.dispose();
   }
 
@@ -111,7 +86,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final newSong = _audio.currentSong;
       if (newSong != null) {
         final index = widget.songs.indexOf(newSong);
-        if (index != -1) setState(() => _currentIndex = index);
+        if (index != -1) {
+          setState(() => _currentIndex = index);
+        }
       }
       return;
     }
@@ -121,7 +98,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final newSong = _audio.currentSong;
       if (newSong != null) {
         final index = widget.songs.indexOf(newSong);
-        if (index != -1) setState(() => _currentIndex = index);
+        if (index != -1) {
+          setState(() => _currentIndex = index);
+        }
       }
     } else {
       _isStoppedByUser = true;
@@ -134,44 +113,53 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _changeSong(int newIndex) async {
     if (newIndex < 0 || newIndex >= widget.songs.length) {
       if (_repeatMode == RepeatMode.all) {
-        if (newIndex < 0) newIndex = widget.songs.length - 1;
-        else if (newIndex >= widget.songs.length) newIndex = 0;
+        if (newIndex < 0) {
+          newIndex = widget.songs.length - 1;
+        } else if (newIndex >= widget.songs.length) {
+          newIndex = 0;
+        }
       } else {
         return;
       }
     }
     setState(() => _currentIndex = newIndex);
-    try {
-      await _audio.play(widget.songs[_currentIndex]);
-    } catch (e) {
-      // File không tồn tại, xóa khỏi danh sách hoặc thông báo
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Lỗi phát nhạc: $e')),
-      );
-    }
+    await _audio.play(widget.songs[_currentIndex]);
   }
 
   void _toggleAutoNext() => setState(() => _autoNext = !_autoNext);
+
   void _toggleRepeat() {
     setState(() {
-      if (_repeatMode == RepeatMode.none) _repeatMode = RepeatMode.one;
-      else if (_repeatMode == RepeatMode.one) _repeatMode = RepeatMode.all;
-      else _repeatMode = RepeatMode.none;
+      if (_repeatMode == RepeatMode.none) {
+        _repeatMode = RepeatMode.one;
+      } else if (_repeatMode == RepeatMode.one) {
+        _repeatMode = RepeatMode.all;
+      } else {
+        _repeatMode = RepeatMode.none;
+      }
     });
   }
 
   IconData _getRepeatIcon() {
     switch (_repeatMode) {
-      case RepeatMode.none: return Icons.repeat;
-      case RepeatMode.one: return Icons.repeat_one;
-      case RepeatMode.all: return Icons.repeat;
+      case RepeatMode.none:
+        return Icons.repeat;
+      case RepeatMode.one:
+        return Icons.repeat_one;
+      case RepeatMode.all:
+        return Icons.repeat;
     }
+  }
+
+  String _formatDuration(Duration duration) {
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 
   @override
   Widget build(BuildContext context) {
     final double maxValue = _duration.inSeconds.toDouble() > 1 ? _duration.inSeconds.toDouble() : 1.0;
-    final double currentValue = _position.inSeconds.toDouble().clamp(0, maxValue);
 
     return Scaffold(
       appBar: AppBar(title: Text(_currentSong.title)),
@@ -180,37 +168,61 @@ class _PlayerScreenState extends State<PlayerScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            // Thumbnail với cache
             _currentSong.thumbnailUrl != null
-                ? Image.network(_currentSong.thumbnailUrl!, height: 200, fit: BoxFit.cover)
+                ? cached.CachedNetworkImage(
+              imageUrl: _currentSong.thumbnailUrl!,
+              height: 200,
+              fit: BoxFit.cover,
+              placeholder: (context, url) => const Icon(Icons.album, size: 200),
+              errorWidget: (context, url, error) => const Icon(Icons.album, size: 200),
+            )
                 : const Icon(Icons.album, size: 200),
             const SizedBox(height: 20),
             Text(_currentSong.title, style: const TextStyle(fontSize: 20)),
             Text(_currentSong.artist ?? '', style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 20),
-            Slider(
-              value: currentValue,
-              max: maxValue,
-              onChanged: (val) {
-                setState(() {
-                  _isDragging = true;
-                  _position = Duration(seconds: val.toInt());
-                });
-              },
-              onChangeStart: (_) {
-                setState(() => _isDragging = true);
-              },
-              onChangeEnd: (val) {
-                setState(() => _isDragging = false);
-                _audio.seek(Duration(seconds: val.toInt()));
+
+            // Slider + thời gian chỉ rebuild khi stream có dữ liệu
+            StreamBuilder<Duration>(
+              stream: _audio.positionStream,
+              builder: (context, snapshot) {
+                final position = snapshot.data ?? Duration.zero;
+                return Column(
+                  children: [
+                    Slider(
+                      value: position.inSeconds.toDouble().clamp(0, maxValue),
+                      max: maxValue,
+                      onChanged: (val) {
+                        _audio.seek(Duration(seconds: val.toInt()));
+                      },
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(_formatDuration(position)),
+                        Text(_formatDuration(_duration)),
+                      ],
+                    ),
+                  ],
+                );
               },
             ),
+
+            const SizedBox(height: 10),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                IconButton(icon: Icon(_getRepeatIcon()), onPressed: _toggleRepeat,
-                    color: _repeatMode != RepeatMode.none ? Colors.green : Colors.grey),
+                IconButton(
+                  icon: Icon(_getRepeatIcon()),
+                  onPressed: _toggleRepeat,
+                  color: _repeatMode != RepeatMode.none ? Colors.green : Colors.grey,
+                ),
                 const SizedBox(width: 8),
-                IconButton(icon: const Icon(Icons.skip_previous), onPressed: () => _changeSong(_currentIndex - 1)),
+                IconButton(
+                  icon: const Icon(Icons.skip_previous),
+                  onPressed: () => _changeSong(_currentIndex - 1),
+                ),
                 const SizedBox(width: 8),
                 IconButton(
                   icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, size: 40),
@@ -220,7 +232,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       await _audio.pause();
                     } else {
                       _isStoppedByUser = false;
-                      if (_position.inSeconds >= _duration.inSeconds && _duration.inSeconds > 0) {
+                      final pos = _audio.currentPosition;
+                      if (pos.inSeconds >= _duration.inSeconds && _duration.inSeconds > 0) {
                         await _audio.seek(Duration.zero);
                       }
                       await _audio.resume();
@@ -228,7 +241,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   },
                 ),
                 const SizedBox(width: 8),
-                IconButton(icon: const Icon(Icons.skip_next), onPressed: () => _changeSong(_currentIndex + 1)),
+                IconButton(
+                  icon: const Icon(Icons.skip_next),
+                  onPressed: () => _changeSong(_currentIndex + 1),
+                ),
                 const SizedBox(width: 8),
                 IconButton(
                   icon: const Icon(Icons.skip_next),
