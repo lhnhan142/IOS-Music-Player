@@ -177,6 +177,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // 🔎 Tìm kiếm và hiển thị BottomSheet (kết quả từ khóa)
   Future<void> _searchAndShowBottomSheet(String keyword) async {
     setState(() => _isLoading = true);
     try {
@@ -203,6 +204,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   imageUrl: video['thumbnail'],
                   width: 50,
                   height: 50,
+                  memCacheWidth: 150,
+                  memCacheHeight: 150,
                   fit: BoxFit.cover,
                   placeholder: (context, url) => const Icon(Icons.music_note),
                   errorWidget: (context, url, error) => const Icon(Icons.broken_image),
@@ -229,6 +232,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // 📋 Lấy danh sách video từ link và mở BottomSheet chọn bài
   Future<void> _fetchAndShowPlaylist(String url) async {
     setState(() => _isLoading = true);
     try {
@@ -321,6 +325,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               imageUrl: video['thumbnail'],
                               width: 50,
                               height: 50,
+                              memCacheWidth: 150,
+                              memCacheHeight: 150,
                               fit: BoxFit.cover,
                               placeholder: (context, url) => const Icon(Icons.music_note),
                               errorWidget: (context, url, error) => const Icon(Icons.broken_image),
@@ -511,14 +517,21 @@ class _HomeScreenState extends State<HomeScreen> {
                       artist: task.videoData['artist'],
                       thumbnailUrl: task.videoData['thumbnail'],
                     );
-                    return IgnorePointer(
-                      ignoring: true,
-                      child: SongItem(
-                        song: fakeSong,
-                        isDownloading: true,
-                        progress: task.progress,
-                        onTap: () {},
-                      ),
+
+                    // ✅ Dùng ListenableBuilder để chỉ rebuild task này
+                    return ListenableBuilder(
+                      listenable: task,
+                      builder: (context, child) {
+                        return IgnorePointer(
+                          ignoring: true,
+                          child: SongItem(
+                            song: fakeSong,
+                            isDownloading: true,
+                            progress: task.progress,
+                            onTap: () {},
+                          ),
+                        );
+                      },
                     );
                   } else {
                     final song = _songs[i - downloadingTasks.length];
@@ -537,6 +550,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: SongItem(
                         song: song,
                         isDownloading: false,
+                        progress: 0.0,
                         onTap: () {
                           Navigator.push(
                             context,
@@ -616,6 +630,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     imageUrl: thumbnail,
                     width: 50,
                     height: 50,
+                    memCacheWidth: 150,
+                    memCacheHeight: 150,
                     fit: BoxFit.cover,
                     placeholder: (context, url) => const Icon(Icons.music_note, color: Colors.white),
                     errorWidget: (context, url, error) => const Icon(Icons.music_note, color: Colors.white),

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:developer';
 import 'package:flutter/cupertino.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:path_provider/path_provider.dart';
@@ -70,6 +69,7 @@ class YoutubeService {
       String videoId,
       String title, {
         Function(double)? onProgress,
+        bool Function()? isCancelled,
       }) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
@@ -77,8 +77,13 @@ class YoutubeService {
       final filePath = '${dir.path}/$safeTitle.mp4';
       final file = File(filePath);
 
+      // ✅ ĐÃ FIX LỖI 0:00 TẠI ĐÂY: Kiểm tra file rỗng
       if (await file.exists()) {
-        return filePath;
+        if (await file.length() > 0) {
+          return filePath;
+        } else {
+          await file.delete(); // Xóa file lỗi cũ để tải lại
+        }
       }
 
       final manifest = await yt.videos.streamsClient.getManifest(videoId).timeout(const Duration(seconds: 20));
@@ -89,7 +94,7 @@ class YoutubeService {
       muxedStreams.sort((a, b) => a.bitrate.compareTo(b.bitrate));
       final streamInfo = muxedStreams.first;
 
-      return await _downloadStream(streamInfo, filePath, onProgress: onProgress);
+      return await _downloadStream(streamInfo, filePath, onProgress: onProgress, isCancelled: isCancelled);
     } on SocketException catch (_) {
       throw Exception('Đã mất kết nối mạng trong quá trình tải.');
     } on TimeoutException catch (_) {
@@ -99,42 +104,73 @@ class YoutubeService {
     }
   }
 
-  // 🧠 Hàm ghi stream với tính năng tiến độ (có throttle)
+  // 🧠 Hàm ghi stream với tính năng tiến độ (có throttle + idle timeout detection)
   Future<String> _downloadStream(
       StreamInfo streamInfo,
       String filePath, {
         Function(double)? onProgress,
+        bool Function()? isCancelled,
       }) async {
+    // Download to temp file
+    final tempFile = File('$filePath.tmp');
     final file = File(filePath);
     final stream = yt.videos.streamsClient.get(streamInfo);
-    final sink = file.openWrite();
+    final sink = tempFile.openWrite();
 
     final totalBytes = streamInfo.size?.totalBytes ?? 0;
     int downloadedBytes = 0;
-    int lastPercentage = -1; // ✅ Thêm biến lưu phần trăm gần nhất
+    int lastPercentage = -1;
+    DateTime lastChunkTime = DateTime.now();
+    final idleTimeout = const Duration(seconds: 30); // Phát hiện mạng bị đứng
 
-    await for (final data in stream) {
-      downloadedBytes += data.length;
-      sink.add(data);
+    try {
+      await for (final data in stream) {
+        // Kiểm tra nếu bị hủy
+        if (isCancelled != null && isCancelled()) {
+          await sink.close();
+          if (await tempFile.exists()) await tempFile.delete();
+          throw Exception('Đã hủy tải.');
+        }
 
-      if (totalBytes > 0 && onProgress != null) {
-        final progress = downloadedBytes / totalBytes;
-        final percentage = (progress * 100).toInt();
+        // Kiểm tra idle timeout (nếu không nhận dữ liệu trong 30 giây)
+        final now = DateTime.now();
+        if (now.difference(lastChunkTime) > idleTimeout) {
+          await sink.close();
+          if (await tempFile.exists()) await tempFile.delete();
+          throw Exception('Kết nối bị mất, không nhận được dữ liệu trong 30 giây.');
+        }
+        lastChunkTime = now;
 
-        // ✅ Chỉ gọi update UI khi % thực sự tăng lên
-        if (percentage > lastPercentage) {
-          lastPercentage = percentage;
-          onProgress(progress.clamp(0.0, 1.0));
+        downloadedBytes += data.length;
+        sink.add(data);
+
+        if (totalBytes > 0 && onProgress != null) {
+          final progress = downloadedBytes / totalBytes;
+          final percentage = (progress * 100).toInt();
+
+          // ✅ Chỉ gọi update UI khi % thực sự tăng lên (throttle)
+          if (percentage > lastPercentage) {
+            lastPercentage = percentage;
+            onProgress(progress.clamp(0.0, 1.0));
+          }
         }
       }
-    }
 
-    await sink.close();
-    final size = await file.length();
-    if (size == 0) {
-      throw Exception('File tải về rỗng.');
+      await sink.close();
+      final size = await tempFile.length();
+      if (size == 0) {
+        if (await tempFile.exists()) await tempFile.delete();
+        throw Exception('File tải về rỗng.');
+      }
+
+      // Rename temp file to actual file when download is complete
+      await tempFile.rename(filePath);
+      return filePath;
+    } catch (e) {
+      await sink.close();
+      if (await tempFile.exists()) await tempFile.delete();
+      rethrow;
     }
-    return filePath;
   }
 
   // 📦 Tải playlist
