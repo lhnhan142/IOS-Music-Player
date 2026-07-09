@@ -3,9 +3,12 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/cupertino.dart';
 import '../models/song.dart';
 
+enum RepeatMode { none, one, all }
+
 class AudioManager {
   static final AudioManager _instance = AudioManager._internal();
   factory AudioManager() => _instance;
+
   AudioManager._internal() {
     _player.onPositionChanged.listen((pos) {
       _currentPosition = pos;
@@ -20,6 +23,10 @@ class AudioManager {
     });
     _player.onPlayerComplete.listen((_) {
       _playerCompleteController.add(null);
+      // ✅ Chỉ auto-next nếu không bị dừng bởi người dùng
+      if (!_isStoppedByUser) {
+        _handleAutoNextGlobally();
+      }
     });
   }
 
@@ -33,6 +40,9 @@ class AudioManager {
 
   Duration _currentPosition = Duration.zero;
   Duration _currentDuration = Duration.zero;
+
+  // ✅ Flag đánh dấu người dùng đã dừng/tạm dừng
+  bool _isStoppedByUser = false;
 
   final _positionController = StreamController<Duration>.broadcast();
   final _durationController = StreamController<Duration>.broadcast();
@@ -56,12 +66,35 @@ class AudioManager {
   List<Song>? get playlist => _playlist;
   int get currentIndex => _currentIndex;
 
+  RepeatMode repeatMode = RepeatMode.none;
+  bool autoNext = true;
+
   Song? get currentSong {
     if (_currentPath == null || _playlist == null) return null;
     try {
       return _playlist!.firstWhere((s) => s.localPath == _currentPath);
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<void> _handleAutoNextGlobally() async {
+    if (_playlist == null || _playlist!.isEmpty) return;
+    if (_isStoppedByUser) return; // ✅ Không auto-next nếu user đã dừng
+
+    if (repeatMode == RepeatMode.one) {
+      await seek(Duration.zero);
+      await resume();
+      return;
+    }
+    if (repeatMode == RepeatMode.all) {
+      await next();
+      return;
+    }
+    if (autoNext) {
+      await next();
+    } else {
+      await stop();
     }
   }
 
@@ -86,6 +119,8 @@ class AudioManager {
     if (_currentPath == song.localPath && _player.state == PlayerState.playing) {
       return;
     }
+    // ✅ Reset flag vì user chủ động phát
+    _isStoppedByUser = false;
 
     _currentPath = song.localPath;
     _currentTitle = song.title;
@@ -120,9 +155,18 @@ class AudioManager {
     await play(_playlist![_currentIndex]);
   }
 
-  Future<void> resume() async => _player.resume();
-  Future<void> pause() async => _player.pause();
+  Future<void> resume() async {
+    _isStoppedByUser = false; // ✅ Reset flag
+    await _player.resume();
+  }
+
+  Future<void> pause() async {
+    _isStoppedByUser = true; // ✅ Đánh dấu user dừng
+    await _player.pause();
+  }
+
   Future<void> stop() async {
+    _isStoppedByUser = true; // ✅ Đánh dấu user dừng
     await _player.stop();
     _currentPath = null;
     _currentTitle = null;
@@ -133,11 +177,14 @@ class AudioManager {
     _currentPosition = Duration.zero;
     _currentDuration = Duration.zero;
   }
+
   Future<void> seek(Duration position) async {
     await _player.seek(position);
     _currentPosition = position;
   }
+
   Future<void> setPlaybackRate(double rate) async => _player.setPlaybackRate(rate);
+
   void dispose() {
     _player.dispose();
     _positionController.close();

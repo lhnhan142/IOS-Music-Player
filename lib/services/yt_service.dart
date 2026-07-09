@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:developer'; // cho debugPrint
+import 'dart:developer';
 import 'package:flutter/cupertino.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:path_provider/path_provider.dart';
@@ -99,7 +99,7 @@ class YoutubeService {
     }
   }
 
-  // Hàm ghi stream với tính năng tiến độ
+  // 🧠 Hàm ghi stream với tính năng tiến độ (có throttle)
   Future<String> _downloadStream(
       StreamInfo streamInfo,
       String filePath, {
@@ -109,16 +109,23 @@ class YoutubeService {
     final stream = yt.videos.streamsClient.get(streamInfo);
     final sink = file.openWrite();
 
-    // ✅ Sửa lỗi: dùng totalBytes thay vì bytes
     final totalBytes = streamInfo.size?.totalBytes ?? 0;
     int downloadedBytes = 0;
+    int lastPercentage = -1; // ✅ Thêm biến lưu phần trăm gần nhất
 
     await for (final data in stream) {
       downloadedBytes += data.length;
       sink.add(data);
+
       if (totalBytes > 0 && onProgress != null) {
         final progress = downloadedBytes / totalBytes;
-        onProgress(progress.clamp(0.0, 1.0));
+        final percentage = (progress * 100).toInt();
+
+        // ✅ Chỉ gọi update UI khi % thực sự tăng lên
+        if (percentage > lastPercentage) {
+          lastPercentage = percentage;
+          onProgress(progress.clamp(0.0, 1.0));
+        }
       }
     }
 
@@ -130,7 +137,7 @@ class YoutubeService {
     return filePath;
   }
 
-  // 📦 Tải playlist (giữ nguyên, không có progress chi tiết)
+  // 📦 Tải playlist
   Future<List<Song>> downloadPlaylist(String link, Function(int, int) onProgress) async {
     final videos = await fetchVideosFromLink(link);
     final List<Song> downloaded = [];

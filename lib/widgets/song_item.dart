@@ -45,12 +45,13 @@ class SongItem extends StatelessWidget {
           ),
           if (isDownloading) ...[
             CircularProgressIndicator(
-              value: progress > 0 ? progress : null,
+              // ✅ Clamp để tránh giá trị > 1.0 gây lỗi sọc vàng đen
+              value: progress > 0 ? progress.clamp(0.0, 1.0) : null,
               strokeWidth: 3,
               color: Colors.greenAccent,
             ),
             Text(
-              '${(progress * 100).toInt()}%',
+              '${(progress * 100).toInt().clamp(0, 100)}%',
               style: const TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.bold,
@@ -66,7 +67,9 @@ class SongItem extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: Text(
-        isDownloading ? 'Đang tải... ${(progress * 100).toInt()}%' : (song.artist ?? 'Unknown'),
+        isDownloading
+            ? 'Đang tải... ${(progress * 100).toInt().clamp(0, 100)}%'
+            : (song.artist ?? 'Unknown'),
         overflow: TextOverflow.ellipsis,
       ),
       onTap: isDownloading ? null : onTap,

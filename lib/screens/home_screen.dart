@@ -2,13 +2,17 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/song.dart';
 import '../services/db_service.dart';
 import '../services/yt_service.dart';
 import '../services/audio_manager.dart';
+import '../services/download_manager.dart';
 import '../widgets/song_item.dart';
 import 'player_screen.dart';
+
+enum SortOption { newest, oldest, nameAsc, nameDesc }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -27,6 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Song> _songs = [];
   bool _isLoading = false;
   Timer? _debounceTimer;
+  SortOption _currentSort = SortOption.newest;
 
   @override
   void initState() {
@@ -44,6 +49,26 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  void _applySort() {
+    setState(() {
+      switch (_currentSort) {
+        case SortOption.nameAsc:
+          _songs.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+          break;
+        case SortOption.nameDesc:
+          _songs.sort((a, b) => b.title.toLowerCase().compareTo(a.title.toLowerCase()));
+          break;
+        case SortOption.newest:
+          _songs.sort((a, b) => (b.id ?? 0).compareTo(a.id ?? 0));
+          break;
+        case SortOption.oldest:
+          _songs.sort((a, b) => (a.id ?? 0).compareTo(b.id ?? 0));
+          break;
+      }
+    });
+    _audio.updatePlaylist(_songs);
+  }
+
   Future<void> _loadSongs() async {
     final songs = await _db.getAllSongs();
     final validSongs = <Song>[];
@@ -58,11 +83,86 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (mounted) {
       setState(() => _songs = validSongs);
+      _applySort();
     }
     _audio.updatePlaylist(validSongs);
   }
 
-  // 📥 Xử lý đầu vào
+  Future<void> _search(String keyword) async {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () async {
+      if (keyword.isEmpty) {
+        await _loadSongs();
+      } else {
+        final results = await _db.searchSongs(keyword);
+        if (mounted) {
+          setState(() => _songs = results);
+          _applySort();
+        }
+      }
+    });
+  }
+
+  Future<bool> _deleteSong(Song song) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Xóa bài hát'),
+        content: Text('Bạn có chắc muốn xóa "${song.title}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Hủy'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Xóa', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return false;
+
+    await _db.deleteSong(song.id!);
+    try {
+      final file = File(song.localPath);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (e) {
+      debugPrint('Lỗi xóa file: $e');
+    }
+
+    final newSongs = _songs.where((s) => s.id != song.id).toList();
+    final currentSong = _audio.currentSong;
+    if (currentSong != null && currentSong.id == song.id) {
+      if (newSongs.isNotEmpty) {
+        await _audio.stop();
+        _audio.updatePlaylist(newSongs);
+        await _audio.play(newSongs[0]);
+      } else {
+        await _audio.stop();
+        _audio.updatePlaylist([]);
+      }
+    } else {
+      _audio.updatePlaylist(newSongs);
+    }
+    setState(() => _songs = newSongs);
+    _applySort();
+    return true;
+  }
+
+  void _showErrorSnackBar(dynamic error) {
+    final message = error.toString().replaceAll('Exception: ', '');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.redAccent,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
   Future<void> _handleInput(String input) async {
     if (input.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -71,13 +171,12 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (input.contains('youtube.com') || input.contains('youtu.be')) {
-      await _downloadAndSave(input);
+      await _fetchAndShowPlaylist(input);
     } else {
       await _searchAndShowBottomSheet(input);
     }
   }
 
-  // 🔎 Tìm kiếm và hiển thị BottomSheet
   Future<void> _searchAndShowBottomSheet(String keyword) async {
     setState(() => _isLoading = true);
     try {
@@ -112,7 +211,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 subtitle: Text(video['artist']),
                 onTap: () {
                   Navigator.pop(ctx);
-                  _downloadSingleVideo(video);
+                  final downloadManager = Provider.of<DownloadManager>(context, listen: false);
+                  downloadManager.downloadVideo(
+                    video,
+                    onSuccess: () => _loadSongs(),
+                    onError: (error) => _showErrorSnackBar(error),
+                  );
                 },
               );
             },
@@ -125,167 +229,173 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // ⬇️ Tải một video đơn (có progress)
-  Future<void> _downloadSingleVideo(Map<String, dynamic> video) async {
-    // 1. Tạo bài hát ảo với trạng thái đang tải
-    final downloadingSong = Song(
-      title: video['title'],
-      localPath: '',
-      artist: video['artist'],
-      thumbnailUrl: video['thumbnail'],
-      isDownloading: true,
-      downloadProgress: 0.0,
-    );
-
-    // 2. Chèn vào đầu danh sách để hiển thị ngay
-    setState(() {
-      _songs.insert(0, downloadingSong);
-    });
-
-    try {
-      // 3. Gọi tải với callback tiến độ
-      final path = await _ytService.downloadAudio(
-        video['id'],
-        video['title'],
-        onProgress: (progress) {
-          if (mounted) {
-            setState(() {
-              downloadingSong.downloadProgress = progress;
-            });
-          }
-        },
-      );
-
-      // 4. Tải xong: cập nhật và lưu DB
-      downloadingSong.localPath = path;
-      downloadingSong.isDownloading = false;
-      await _db.insertSong(downloadingSong);
-      await _loadSongs(); // reload để có ID và đồng bộ
-      _urlController.clear();
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Đã tải thành công: ${video['title']}')),
-        );
-      }
-    } catch (e) {
-      // 5. Lỗi: xóa bài ảo khỏi danh sách
-      setState(() {
-        _songs.remove(downloadingSong);
-      });
-      if (mounted) _showErrorSnackBar(e);
-    }
-  }
-
-  // 📥 Tải từ link (playlist) - không có progress chi tiết
-  Future<void> _downloadAndSave(String url) async {
-    if (url.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Vui lòng nhập link YouTube')),
-      );
-      return;
-    }
-
+  Future<void> _fetchAndShowPlaylist(String url) async {
     setState(() => _isLoading = true);
     try {
-      final downloaded = await _ytService.downloadPlaylist(
-        url,
-            (current, total) {
-          debugPrint('Đã tải $current/$total');
-        },
-      );
+      final videos = await _ytService.fetchVideosFromLink(url);
+      if (!mounted) return;
+      setState(() => _isLoading = false);
 
-      for (var song in downloaded) {
-        await _db.insertSong(song);
-      }
-      await _loadSongs();
-      _urlController.clear();
-
-      if (mounted) {
+      if (videos.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Đã tải ${downloaded.length} bài thành công')),
+          const SnackBar(content: Text('Không tìm thấy bài hát nào từ link này.')),
+        );
+        return;
+      }
+
+      _showPlaylistSelectionBottomSheet(videos);
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+      _showErrorSnackBar(e);
+    }
+  }
+
+  void _showPlaylistSelectionBottomSheet(List<Map<String, dynamic>> videos) {
+    List<bool> selected = List<bool>.filled(videos.length, true);
+    bool selectAll = true;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.grey[900],
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            final selectedCount = selected.where((e) => e).length;
+
+            return SizedBox(
+              height: MediaQuery.of(context).size.height * 0.75,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Chọn bài hát ($selectedCount/${videos.length})',
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        Row(
+                          children: [
+                            const Text('Tất cả'),
+                            Checkbox(
+                              value: selectAll,
+                              activeColor: Colors.greenAccent,
+                              onChanged: (val) {
+                                setModalState(() {
+                                  selectAll = val ?? false;
+                                  for (int i = 0; i < selected.length; i++) {
+                                    selected[i] = selectAll;
+                                  }
+                                });
+                              },
+                            ),
+                          ],
+                        )
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: videos.length,
+                      itemBuilder: (context, index) {
+                        final video = videos[index];
+                        return CheckboxListTile(
+                          value: selected[index],
+                          activeColor: Colors.greenAccent,
+                          onChanged: (val) {
+                            setModalState(() {
+                              selected[index] = val ?? false;
+                              selectAll = !selected.contains(false);
+                            });
+                          },
+                          secondary: ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: CachedNetworkImage(
+                              imageUrl: video['thumbnail'],
+                              width: 50,
+                              height: 50,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => const Icon(Icons.music_note),
+                              errorWidget: (context, url, error) => const Icon(Icons.broken_image),
+                            ),
+                          ),
+                          title: Text(
+                            video['title'],
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            video['artist'] ?? '',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16.0),
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.greenAccent,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: selectedCount == 0
+                          ? null
+                          : () {
+                        Navigator.pop(ctx);
+                        _downloadSelectedVideos(videos, selected);
+                      },
+                      child: Text(
+                        'Tải $selectedCount bài hát',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  )
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _downloadSelectedVideos(List<Map<String, dynamic>> videos, List<bool> selected) {
+    final downloadManager = Provider.of<DownloadManager>(context, listen: false);
+    int addedCount = 0;
+
+    for (int i = 0; i < videos.length; i++) {
+      if (selected[i]) {
+        addedCount++;
+        downloadManager.downloadVideo(
+          videos[i],
+          onSuccess: () => _loadSongs(),
+          onError: (error) => _showErrorSnackBar(error),
         );
       }
-    } catch (e) {
-      if (mounted) _showErrorSnackBar(e);
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  void _showErrorSnackBar(dynamic error) {
-    final message = error.toString().replaceAll('Exception: ', '');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.redAccent,
-        duration: const Duration(seconds: 3),
-      ),
-    );
-  }
-
-  // 🔍 Tìm kiếm trong thư viện (debounce)
-  Future<void> _search(String keyword) async {
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(const Duration(milliseconds: 500), () async {
-      if (keyword.isEmpty) {
-        await _loadSongs();
-      } else {
-        final results = await _db.searchSongs(keyword);
-        if (mounted) setState(() => _songs = results);
-      }
-    });
-  }
-
-  // 🗑️ Xóa bài
-  Future<bool> _deleteSong(Song song) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Xóa bài hát'),
-        content: Text('Bạn có chắc muốn xóa "${song.title}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Hủy'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Xóa', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true) return false;
-
-    await _db.deleteSong(song.id!);
-    try {
-      final file = File(song.localPath);
-      if (await file.exists()) {
-        await file.delete();
-      }
-    } catch (e) {
-      debugPrint('Lỗi xóa file: $e');
     }
 
-    final newSongs = _songs.where((s) => s.id != song.id).toList();
-    final currentSong = _audio.currentSong;
-    if (currentSong != null && currentSong.id == song.id) {
-      if (newSongs.isNotEmpty) {
-        await _audio.stop();
-        _audio.updatePlaylist(newSongs);
-        await _audio.play(newSongs[0]);
-      } else {
-        await _audio.stop();
-        _audio.updatePlaylist([]);
-      }
-    } else {
-      _audio.updatePlaylist(newSongs);
+    if (addedCount > 0) {
+      _urlController.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Đã đẩy $addedCount bài hát vào hàng đợi tải ngầm.'),
+          backgroundColor: Colors.green,
+        ),
+      );
     }
-
-    setState(() => _songs = newSongs);
-    return true;
   }
 
   @override
@@ -293,6 +403,34 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('My Music'),
+        actions: [
+          PopupMenuButton<SortOption>(
+            icon: const Icon(Icons.sort),
+            tooltip: 'Sắp xếp',
+            onSelected: (SortOption result) {
+              _currentSort = result;
+              _applySort();
+            },
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<SortOption>>[
+              const PopupMenuItem<SortOption>(
+                value: SortOption.newest,
+                child: Text('Mới thêm nhất'),
+              ),
+              const PopupMenuItem<SortOption>(
+                value: SortOption.oldest,
+                child: Text('Cũ nhất'),
+              ),
+              const PopupMenuItem<SortOption>(
+                value: SortOption.nameAsc,
+                child: Text('Tên (A-Z)'),
+              ),
+              const PopupMenuItem<SortOption>(
+                value: SortOption.nameDesc,
+                child: Text('Tên (Z-A)'),
+              ),
+            ],
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(100),
           child: Padding(
@@ -304,19 +442,21 @@ class _HomeScreenState extends State<HomeScreen> {
                     Expanded(
                       child: TextField(
                         controller: _urlController,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           hintText: 'Nhập tên bài hát hoặc dán link YouTube...',
-                          border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                          border: const OutlineInputBorder(),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.clear, size: 20),
+                            onPressed: () => _urlController.clear(),
+                          ),
                         ),
-                        // ✅ Bỏ enabled: !_isLoading để không khóa UI khi tải playlist
                         onSubmitted: _handleInput,
                       ),
                     ),
                     const SizedBox(width: 8),
                     IconButton(
                       icon: const Icon(Icons.download),
-                      // ✅ Nút vẫn hoạt động khi tải, chỉ disable nếu đang tải playlist
                       onPressed: _isLoading ? null : () => _handleInput(_urlController.text),
                     ),
                   ],
@@ -325,11 +465,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 TextField(
                   controller: _searchController,
                   focusNode: _searchFocusNode,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     hintText: 'Tìm kiếm trong thư viện...',
-                    prefixIcon: Icon(Icons.search),
-                    border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                    prefixIcon: const Icon(Icons.search),
+                    border: const OutlineInputBorder(),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.clear, size: 20),
+                      onPressed: () {
+                        _searchController.clear();
+                        _search('');
+                        _searchFocusNode.unfocus();
+                      },
+                    ),
                   ),
                   onChanged: _search,
                 ),
@@ -342,41 +490,68 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           _isLoading
               ? const Center(child: CircularProgressIndicator())
-              : _songs.isEmpty
-              ? const Center(child: Text('Chưa có bài hát nào. Hãy tải từ YouTube!'))
-              : ListView.builder(
-            padding: const EdgeInsets.only(bottom: 80),
-            itemCount: _songs.length,
-            itemBuilder: (ctx, i) {
-              final song = _songs[i];
-              return Dismissible(
-                key: Key(song.id?.toString() ?? '${DateTime.now()}'),
-                direction: DismissDirection.endToStart,
-                background: Container(
-                  color: Colors.red,
-                  alignment: Alignment.centerRight,
-                  padding: const EdgeInsets.only(right: 20.0),
-                  child: const Icon(Icons.delete, color: Colors.white),
-                ),
-                confirmDismiss: (direction) async {
-                  // Không cho xóa nếu đang tải
-                  if (song.isDownloading) return false;
-                  return await _deleteSong(song);
-                },
-                child: SongItem(
-                  song: song,
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => PlayerScreen(
-                          songs: _songs,
-                          initialIndex: i,
-                        ),
+              : Consumer<DownloadManager>(
+            builder: (context, downloadManager, child) {
+              final downloadingTasks = downloadManager.tasks.values.toList();
+              final totalItems = downloadingTasks.length + _songs.length;
+
+              if (totalItems == 0) {
+                return const Center(child: Text('Chưa có bài hát nào. Hãy tải từ YouTube!'));
+              }
+
+              return ListView.builder(
+                padding: const EdgeInsets.only(bottom: 80),
+                itemCount: totalItems,
+                itemBuilder: (ctx, i) {
+                  if (i < downloadingTasks.length) {
+                    final task = downloadingTasks[i];
+                    final fakeSong = Song(
+                      title: task.videoData['title'],
+                      localPath: '',
+                      artist: task.videoData['artist'],
+                      thumbnailUrl: task.videoData['thumbnail'],
+                    );
+                    return IgnorePointer(
+                      ignoring: true,
+                      child: SongItem(
+                        song: fakeSong,
+                        isDownloading: true,
+                        progress: task.progress,
+                        onTap: () {},
                       ),
                     );
-                  },
-                ),
+                  } else {
+                    final song = _songs[i - downloadingTasks.length];
+                    return Dismissible(
+                      key: Key(song.id.toString()),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        color: Colors.red,
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20.0),
+                        child: const Icon(Icons.delete, color: Colors.white),
+                      ),
+                      confirmDismiss: (direction) async {
+                        return await _deleteSong(song);
+                      },
+                      child: SongItem(
+                        song: song,
+                        isDownloading: false,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => PlayerScreen(
+                                songs: _songs,
+                                initialIndex: i - downloadingTasks.length,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    );
+                  }
+                },
               );
             },
           ),
@@ -442,10 +617,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     width: 50,
                     height: 50,
                     fit: BoxFit.cover,
-                    placeholder: (context, url) =>
-                    const Icon(Icons.music_note, color: Colors.white),
-                    errorWidget: (context, url, error) =>
-                    const Icon(Icons.music_note, color: Colors.white),
+                    placeholder: (context, url) => const Icon(Icons.music_note, color: Colors.white),
+                    errorWidget: (context, url, error) => const Icon(Icons.music_note, color: Colors.white),
                   )
                       : const Icon(Icons.music_note, size: 50, color: Colors.white),
                   const SizedBox(width: 12),
@@ -454,27 +627,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          title,
-                          style: const TextStyle(color: Colors.white, fontSize: 14),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        Text(
-                          artist,
-                          style: const TextStyle(color: Colors.grey, fontSize: 12),
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                        Text(title, style: const TextStyle(color: Colors.white, fontSize: 14), overflow: TextOverflow.ellipsis),
+                        Text(artist, style: const TextStyle(color: Colors.grey, fontSize: 12), overflow: TextOverflow.ellipsis),
                       ],
                     ),
                   ),
                   IconButton(
                     icon: Icon(isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white),
                     onPressed: () {
-                      if (isPlaying) {
-                        _audio.pause();
-                      } else {
-                        _audio.resume();
-                      }
+                      if (isPlaying) _audio.pause();
+                      else _audio.resume();
                     },
                   ),
                   IconButton(

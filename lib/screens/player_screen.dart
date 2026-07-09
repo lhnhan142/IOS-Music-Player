@@ -1,10 +1,9 @@
+import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart' as cached;
+import 'package:flutter/material.dart' hide RepeatMode;
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/song.dart';
 import '../services/audio_manager.dart';
-
-enum RepeatMode { none, one, all }
 
 class PlayerScreen extends StatefulWidget {
   final List<Song> songs;
@@ -23,46 +22,48 @@ class PlayerScreen extends StatefulWidget {
 class _PlayerScreenState extends State<PlayerScreen> {
   final AudioManager _audio = AudioManager();
   late int _currentIndex;
-  Song get _currentSong => widget.songs[_currentIndex];
 
-  Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   bool _isPlaying = false;
-  RepeatMode _repeatMode = RepeatMode.none;
-  bool _autoNext = true;
-  bool _isStoppedByUser = false;
   double _playbackRate = 1.0;
+
+  StreamSubscription? _durationSub;
+  StreamSubscription? _stateSub;
+  StreamSubscription? _completeSub;
+
+  Song get _currentSong => widget.songs[_currentIndex];
 
   @override
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex;
 
-    // ✅ Lấy giá trị hiện tại từ AudioManager ngay lập tức
-    _position = _audio.currentPosition;
+    // Khởi tạo với giá trị hiện tại để tránh nhấp nháy
     _duration = _audio.currentDuration;
 
     if (_audio.playlist == null || _audio.playlist!.isEmpty) {
       _audio.setPlaylist(widget.songs, _currentIndex);
     }
 
-    _audio.positionStream.listen((pos) {
-      if (mounted) setState(() => _position = pos);
-    });
-    _audio.durationStream.listen((dur) {
+    _durationSub = _audio.durationStream.listen((dur) {
       if (mounted) setState(() => _duration = dur);
     });
-    _audio.playerStateStream.listen((state) {
-      if (mounted) {
-        setState(() => _isPlaying = state == PlayerState.playing);
-        if (state != PlayerState.stopped && state != PlayerState.completed) {
-          _isStoppedByUser = false;
-        }
-      }
+
+    _stateSub = _audio.playerStateStream.listen((state) {
+      if (mounted) setState(() => _isPlaying = state == PlayerState.playing);
     });
-    _audio.playerCompleteStream.listen((_) {
-      if (mounted && !_isStoppedByUser) {
-        _handleSongEnd();
+
+    _completeSub = _audio.playerCompleteStream.listen((_) {
+      if (mounted) {
+        // Cập nhật chỉ số bài hát khi auto-next chuyển bài
+        final newSong = _audio.currentSong;
+        if (newSong != null) {
+          final index = widget.songs.indexOf(newSong);
+          if (index != -1) setState(() => _currentIndex = index);
+        } else {
+          // Nếu không còn bài hát nào, reset về 0 hoặc giữ nguyên
+          // setState(() => _currentIndex = 0);
+        }
       }
     });
 
@@ -78,56 +79,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    _durationSub?.cancel();
+    _stateSub?.cancel();
+    _completeSub?.cancel();
     super.dispose();
-  }
-
-  Future<void> _handleSongEnd() async {
-    // ✅ Nếu duration = 0 (chưa load xong) thì không xử lý
-    if (_duration == Duration.zero) return;
-
-    if (_repeatMode == RepeatMode.one) {
-      await _audio.seek(Duration.zero);
-      await _audio.resume();
-      return;
-    }
-
-    if (_repeatMode == RepeatMode.all) {
-      await _audio.next();
-      final newSong = _audio.currentSong;
-      if (newSong != null) {
-        final index = widget.songs.indexOf(newSong);
-        if (index != -1) {
-          setState(() => _currentIndex = index);
-        }
-      }
-      return;
-    }
-
-    if (_autoNext) {
-      await _audio.next();
-      final newSong = _audio.currentSong;
-      if (newSong != null) {
-        final index = widget.songs.indexOf(newSong);
-        if (index != -1) {
-          setState(() => _currentIndex = index);
-        }
-      }
-    } else {
-      _isStoppedByUser = true;
-      await _audio.seek(Duration.zero);
-      await _audio.pause();
-      setState(() => _isPlaying = false);
-    }
   }
 
   Future<void> _changeSong(int newIndex) async {
     if (newIndex < 0 || newIndex >= widget.songs.length) {
-      if (_repeatMode == RepeatMode.all) {
-        if (newIndex < 0) {
-          newIndex = widget.songs.length - 1;
-        } else if (newIndex >= widget.songs.length) {
-          newIndex = 0;
-        }
+      if (_audio.repeatMode == RepeatMode.all) {
+        newIndex = newIndex < 0 ? widget.songs.length - 1 : 0;
       } else {
         return;
       }
@@ -136,39 +97,35 @@ class _PlayerScreenState extends State<PlayerScreen> {
     await _audio.play(widget.songs[_currentIndex]);
   }
 
-  void _toggleAutoNext() => setState(() => _autoNext = !_autoNext);
+  void _toggleAutoNext() {
+    setState(() => _audio.autoNext = !_audio.autoNext);
+  }
 
   void _toggleRepeat() {
     setState(() {
-      if (_repeatMode == RepeatMode.none) {
-        _repeatMode = RepeatMode.one;
-      } else if (_repeatMode == RepeatMode.one) {
-        _repeatMode = RepeatMode.all;
+      if (_audio.repeatMode == RepeatMode.none) {
+        _audio.repeatMode = RepeatMode.one;
+      } else if (_audio.repeatMode == RepeatMode.one) {
+        _audio.repeatMode = RepeatMode.all;
       } else {
-        _repeatMode = RepeatMode.none;
+        _audio.repeatMode = RepeatMode.none;
       }
     });
   }
 
   void _togglePlaybackRate() {
     setState(() {
-      if (_playbackRate == 1.0) {
-        _playbackRate = 1.25;
-      } else if (_playbackRate == 1.25) {
-        _playbackRate = 1.5;
-      } else if (_playbackRate == 1.5) {
-        _playbackRate = 2.0;
-      } else if (_playbackRate == 2.0) {
-        _playbackRate = 0.75;
-      } else {
-        _playbackRate = 1.0;
-      }
+      if (_playbackRate == 1.0) _playbackRate = 1.25;
+      else if (_playbackRate == 1.25) _playbackRate = 1.5;
+      else if (_playbackRate == 1.5) _playbackRate = 2.0;
+      else if (_playbackRate == 2.0) _playbackRate = 0.75;
+      else _playbackRate = 1.0;
       _audio.setPlaybackRate(_playbackRate);
     });
   }
 
   IconData _getRepeatIcon() {
-    switch (_repeatMode) {
+    switch (_audio.repeatMode) {
       case RepeatMode.none:
         return Icons.repeat;
       case RepeatMode.one:
@@ -187,7 +144,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   Widget build(BuildContext context) {
     final double maxValue = _duration.inSeconds.toDouble() > 1 ? _duration.inSeconds.toDouble() : 1.0;
-    final double currentValue = _position.inSeconds.toDouble().clamp(0, maxValue);
 
     return Scaffold(
       appBar: AppBar(title: Text(_currentSong.title)),
@@ -197,7 +153,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             _currentSong.thumbnailUrl != null
-                ? cached.CachedNetworkImage(
+                ? CachedNetworkImage(
               imageUrl: _currentSong.thumbnailUrl!,
               height: 200,
               fit: BoxFit.cover,
@@ -206,19 +162,35 @@ class _PlayerScreenState extends State<PlayerScreen> {
             )
                 : const Icon(Icons.album, size: 200),
             const SizedBox(height: 20),
-            Text(_currentSong.title, style: const TextStyle(fontSize: 20)),
-            Text(_currentSong.artist ?? '', style: const TextStyle(fontSize: 16)),
-            const SizedBox(height: 20),
+
+            Text(
+              _currentSong.title,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _currentSong.artist ?? 'Unknown',
+              style: const TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+            const SizedBox(height: 30),
 
             StreamBuilder<Duration>(
               stream: _audio.positionStream,
               builder: (context, snapshot) {
                 final position = snapshot.data ?? Duration.zero;
+                // ✅ Đảm bảo maxValue >= 1
+                final double maxValue = _duration.inSeconds.toDouble() > 1 ? _duration.inSeconds.toDouble() : 1.0;
+                final double safePosition = position.inSeconds.toDouble().clamp(0, maxValue);
+
                 return Column(
                   children: [
                     Slider(
-                      value: position.inSeconds.toDouble().clamp(0, maxValue),
+                      value: safePosition,
                       max: maxValue,
+                      activeColor: Colors.blueAccent,
                       onChanged: (val) {
                         _audio.seek(Duration(seconds: val.toInt()));
                       },
@@ -235,9 +207,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
               },
             ),
 
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+            const SizedBox(height: 20),
+
+            Wrap(
+              alignment: WrapAlignment.center,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 4,
               children: [
                 TextButton(
                   onPressed: _togglePlaybackRate,
@@ -246,26 +221,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     style: const TextStyle(color: Colors.cyan, fontSize: 16),
                   ),
                 ),
-                const SizedBox(width: 4),
                 IconButton(
                   icon: Icon(_getRepeatIcon()),
                   onPressed: _toggleRepeat,
-                  color: _repeatMode != RepeatMode.none ? Colors.green : Colors.grey,
+                  color: _audio.repeatMode != RepeatMode.none ? Colors.green : Colors.grey,
                 ),
-                const SizedBox(width: 8),
                 IconButton(
-                  icon: const Icon(Icons.skip_previous),
+                  icon: const Icon(Icons.skip_previous, size: 36),
                   onPressed: () => _changeSong(_currentIndex - 1),
                 ),
-                const SizedBox(width: 8),
                 IconButton(
-                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, size: 40),
+                  icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_fill, size: 64),
+                  color: Colors.blueAccent,
                   onPressed: () async {
                     if (_isPlaying) {
-                      _isStoppedByUser = true;
                       await _audio.pause();
                     } else {
-                      _isStoppedByUser = false;
                       final pos = _audio.currentPosition;
                       if (pos.inSeconds >= _duration.inSeconds && _duration.inSeconds > 0) {
                         await _audio.seek(Duration.zero);
@@ -274,25 +245,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     }
                   },
                 ),
-                const SizedBox(width: 8),
                 IconButton(
-                  icon: const Icon(Icons.skip_next),
+                  icon: const Icon(Icons.skip_next, size: 36),
                   onPressed: () => _changeSong(_currentIndex + 1),
                 ),
-                const SizedBox(width: 8),
                 IconButton(
-                  icon: const Icon(Icons.skip_next),
+                  icon: const Icon(Icons.playlist_play),
                   onPressed: _toggleAutoNext,
-                  color: _autoNext ? Colors.blue : Colors.grey,
+                  color: _audio.autoNext ? Colors.blue : Colors.grey,
+                  tooltip: 'Tự động phát tiếp',
                 ),
               ],
-            ),
-            Padding(
-              padding: const EdgeInsets.only(top: 8.0),
-              child: Text(
-                'Loop: ${_repeatMode.name}  |  AutoNext: ${_autoNext ? 'ON' : 'OFF'}',
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-              ),
             ),
           ],
         ),
