@@ -75,6 +75,9 @@ class _HomeScreenState extends State<HomeScreen> {
     for (var song in songs) {
       final file = File(song.localPath);
       if (await file.exists()) {
+        // ✅ Lấy dung lượng file
+        final size = await file.length();
+        song.fileSize = size;
         validSongs.add(song);
       } else {
         await _db.deleteSong(song.id!);
@@ -177,7 +180,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // 🔎 Tìm kiếm và hiển thị BottomSheet (kết quả từ khóa)
   Future<void> _searchAndShowBottomSheet(String keyword) async {
     setState(() => _isLoading = true);
     try {
@@ -232,7 +234,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // 📋 Lấy danh sách video từ link và mở BottomSheet chọn bài
   Future<void> _fetchAndShowPlaylist(String url) async {
     setState(() => _isLoading = true);
     try {
@@ -518,18 +519,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       thumbnailUrl: task.videoData['thumbnail'],
                     );
 
-                    // ✅ Dùng ListenableBuilder để chỉ rebuild task này
                     return ListenableBuilder(
                       listenable: task,
                       builder: (context, child) {
-                        return IgnorePointer(
-                          ignoring: true,
-                          child: SongItem(
-                            song: fakeSong,
-                            isDownloading: true,
-                            progress: task.progress,
-                            onTap: () {},
-                          ),
+                        return SongItem(
+                          song: fakeSong,
+                          isDownloading: true,
+                          progress: task.progress,
+                          downloadSizeInfo: task.sizeInfo,
+                          onTap: () {},
+                          onCancelDownload: () {
+                            Provider.of<DownloadManager>(context, listen: false)
+                                .cancelDownload(task.videoData['id']);
+                          },
                         );
                       },
                     );
@@ -550,7 +552,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: SongItem(
                         song: song,
                         isDownloading: false,
-                        progress: 0.0,
                         onTap: () {
                           Navigator.push(
                             context,

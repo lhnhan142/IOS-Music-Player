@@ -64,11 +64,11 @@ class YoutubeService {
     }
   }
 
-  // ⬇️ Tải audio với callback tiến độ
+  // ⬇️ Tải audio ổn định với luồng Muxed và tính MB
   Future<String> downloadAudio(
       String videoId,
       String title, {
-        Function(double)? onProgress,
+        Function(double, String)? onProgress,
         bool Function()? isCancelled,
       }) async {
     try {
@@ -77,19 +77,19 @@ class YoutubeService {
       final filePath = '${dir.path}/$safeTitle.mp4';
       final file = File(filePath);
 
-      // ✅ ĐÃ FIX LỖI 0:00 TẠI ĐÂY: Kiểm tra file rỗng
+      // Chống file rỗng gây lỗi 0:00
       if (await file.exists()) {
         if (await file.length() > 0) {
           return filePath;
         } else {
-          await file.delete(); // Xóa file lỗi cũ để tải lại
+          await file.delete();
         }
       }
 
       final manifest = await yt.videos.streamsClient.getManifest(videoId).timeout(const Duration(seconds: 20));
       final muxedStreams = manifest.muxed.toList();
       if (muxedStreams.isEmpty) {
-        throw Exception('Không tìm thấy luồng muxed cho video này.');
+        throw Exception('Không tìm thấy luồng dữ liệu cho video này.');
       }
       muxedStreams.sort((a, b) => a.bitrate.compareTo(b.bitrate));
       final streamInfo = muxedStreams.first;
@@ -104,35 +104,33 @@ class YoutubeService {
     }
   }
 
-  // 🧠 Hàm ghi stream với tính năng tiến độ (có throttle + idle timeout detection)
+  // 🧠 Hàm ghi stream với tính năng tiến độ MB và Timeout
   Future<String> _downloadStream(
       StreamInfo streamInfo,
       String filePath, {
-        Function(double)? onProgress,
+        Function(double, String)? onProgress,
         bool Function()? isCancelled,
       }) async {
-    // Download to temp file
     final tempFile = File('$filePath.tmp');
-    final file = File(filePath);
     final stream = yt.videos.streamsClient.get(streamInfo);
     final sink = tempFile.openWrite();
 
-    final totalBytes = streamInfo.size?.totalBytes ?? 0;
+    final totalBytes = streamInfo.size.totalBytes;
     int downloadedBytes = 0;
     int lastPercentage = -1;
     DateTime lastChunkTime = DateTime.now();
-    final idleTimeout = const Duration(seconds: 30); // Phát hiện mạng bị đứng
+    final idleTimeout = const Duration(seconds: 30);
 
     try {
       await for (final data in stream) {
-        // Kiểm tra nếu bị hủy
+        // Hủy tải nếu người dùng nhấn X
         if (isCancelled != null && isCancelled()) {
           await sink.close();
           if (await tempFile.exists()) await tempFile.delete();
           throw Exception('Đã hủy tải.');
         }
 
-        // Kiểm tra idle timeout (nếu không nhận dữ liệu trong 30 giây)
+        // Chống kẹt 0%
         final now = DateTime.now();
         if (now.difference(lastChunkTime) > idleTimeout) {
           await sink.close();
@@ -144,14 +142,19 @@ class YoutubeService {
         downloadedBytes += data.length;
         sink.add(data);
 
+        // Tính % và MB
         if (totalBytes > 0 && onProgress != null) {
           final progress = downloadedBytes / totalBytes;
           final percentage = (progress * 100).toInt();
 
-          // ✅ Chỉ gọi update UI khi % thực sự tăng lên (throttle)
           if (percentage > lastPercentage) {
             lastPercentage = percentage;
-            onProgress(progress.clamp(0.0, 1.0));
+
+            final downloadedMB = (downloadedBytes / (1024 * 1024)).toStringAsFixed(1);
+            final totalMB = (totalBytes / (1024 * 1024)).toStringAsFixed(1);
+            final sizeInfo = '${downloadedMB}MB / ${totalMB}MB';
+
+            onProgress(progress.clamp(0.0, 1.0), sizeInfo);
           }
         }
       }
@@ -163,7 +166,6 @@ class YoutubeService {
         throw Exception('File tải về rỗng.');
       }
 
-      // Rename temp file to actual file when download is complete
       await tempFile.rename(filePath);
       return filePath;
     } catch (e) {

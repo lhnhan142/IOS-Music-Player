@@ -6,28 +6,33 @@ import 'db_service.dart';
 class DownloadTask extends ChangeNotifier {
   final Map<String, dynamic> videoData;
   double _progress = 0.0;
+  String _sizeInfo = '';
   bool _isComplete = false;
-  bool isCancelled = false; // ✅ Cờ hủy
+  bool isCancelled = false;
 
   DownloadTask({required this.videoData});
 
   double get progress => _progress;
+  String get sizeInfo => _sizeInfo;
   bool get isComplete => _isComplete;
 
-  void updateProgress(double value) {
+  void updateProgress(double value, String sizeText) {
     _progress = value.clamp(0.0, 1.0);
+    _sizeInfo = sizeText;
     notifyListeners();
   }
 
   void markComplete() {
     _isComplete = true;
     _progress = 1.0;
+    _sizeInfo = '';
     notifyListeners();
   }
 
   void markError() {
     _isComplete = false;
     _progress = 0.0;
+    _sizeInfo = '';
     notifyListeners();
   }
 }
@@ -51,13 +56,11 @@ class DownloadManager extends ChangeNotifier {
   final int _maxConcurrent = 3;
 
   bool isDownloading(String videoId) => _tasks.containsKey(videoId);
-
   DownloadTask? getTask(String videoId) => _tasks[videoId];
 
   // ✅ Hàm hủy tải
   void cancelDownload(String videoId) {
     _queue.removeWhere((item) => item.video['id'] == videoId);
-
     if (_tasks.containsKey(videoId)) {
       final task = _tasks[videoId]!;
       task.isCancelled = true;
@@ -105,13 +108,13 @@ class DownloadManager extends ChangeNotifier {
       final path = await _ytService.downloadAudio(
         videoId,
         video['title'],
-        onProgress: (progress) {
-          if (!task.isCancelled) task.updateProgress(progress);
+        onProgress: (progress, sizeInfo) {
+          if (!task.isCancelled) task.updateProgress(progress, sizeInfo);
         },
         isCancelled: () => task.isCancelled,
       );
 
-      if (task.isCancelled) return; // Đã hủy thì không lưu DB
+      if (task.isCancelled) return;
 
       final song = Song(
         title: video['title'],
@@ -127,7 +130,7 @@ class DownloadManager extends ChangeNotifier {
       item.onSuccess();
       _processQueue();
     } catch (e) {
-      if (task.isCancelled) return; // Bỏ qua lỗi do hủy
+      if (task.isCancelled) return;
 
       _tasks.remove(videoId);
       task.markError();
