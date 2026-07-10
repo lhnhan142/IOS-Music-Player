@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:flutter/cupertino.dart';
 import '../models/song.dart';
 
-enum RepeatMode { none, one, all }
+// ✅ Đổi tên thành LoopMode để tránh xung đột với Flutter's RepeatMode
+enum LoopMode { none, one, all }
 
 class AudioManager {
   static final AudioManager _instance = AudioManager._internal();
@@ -23,7 +23,6 @@ class AudioManager {
     });
     _player.onPlayerComplete.listen((_) {
       _playerCompleteController.add(null);
-      // ✅ Chỉ auto-next nếu không bị dừng bởi người dùng
       if (!_isStoppedByUser) {
         _handleAutoNextGlobally();
       }
@@ -40,8 +39,6 @@ class AudioManager {
 
   Duration _currentPosition = Duration.zero;
   Duration _currentDuration = Duration.zero;
-
-  // ✅ Flag đánh dấu người dùng đã dừng/tạm dừng
   bool _isStoppedByUser = false;
 
   final _positionController = StreamController<Duration>.broadcast();
@@ -66,7 +63,7 @@ class AudioManager {
   List<Song>? get playlist => _playlist;
   int get currentIndex => _currentIndex;
 
-  RepeatMode repeatMode = RepeatMode.none;
+  LoopMode loopMode = LoopMode.none;
   bool autoNext = true;
 
   Song? get currentSong {
@@ -78,19 +75,31 @@ class AudioManager {
     }
   }
 
+  // ✅ Set loop mode (dùng ReleaseMode của audioplayers)
+  Future<void> setLoopMode(LoopMode mode) async {
+    loopMode = mode;
+    if (mode == LoopMode.one) {
+      await _player.setReleaseMode(ReleaseMode.loop);
+    } else {
+      await _player.setReleaseMode(ReleaseMode.release);
+    }
+  }
+
+  // ✅ Xử lý khi bài hát kết thúc
   Future<void> _handleAutoNextGlobally() async {
     if (_playlist == null || _playlist!.isEmpty) return;
-    if (_isStoppedByUser) return; // ✅ Không auto-next nếu user đã dừng
+    if (_isStoppedByUser) return;
 
-    if (repeatMode == RepeatMode.one) {
-      await seek(Duration.zero);
-      await resume();
+    if (loopMode == LoopMode.one) {
+      // ReleaseMode.loop đã tự xử lý lặp, không cần làm gì
       return;
     }
-    if (repeatMode == RepeatMode.all) {
+
+    if (loopMode == LoopMode.all) {
       await next();
       return;
     }
+
     if (autoNext) {
       await next();
     } else {
@@ -119,7 +128,6 @@ class AudioManager {
     if (_currentPath == song.localPath && _player.state == PlayerState.playing) {
       return;
     }
-    // ✅ Reset flag vì user chủ động phát
     _isStoppedByUser = false;
 
     _currentPath = song.localPath;
@@ -137,7 +145,7 @@ class AudioManager {
       await _player.setSource(DeviceFileSource(song.localPath));
       await _player.resume();
     } catch (e) {
-      debugPrint('Lỗi phát nhạc: $e');
+      print('Lỗi phát nhạc: $e');
       rethrow;
     }
   }
@@ -156,17 +164,17 @@ class AudioManager {
   }
 
   Future<void> resume() async {
-    _isStoppedByUser = false; // ✅ Reset flag
+    _isStoppedByUser = false;
     await _player.resume();
   }
 
   Future<void> pause() async {
-    _isStoppedByUser = true; // ✅ Đánh dấu user dừng
+    _isStoppedByUser = true;
     await _player.pause();
   }
 
   Future<void> stop() async {
-    _isStoppedByUser = true; // ✅ Đánh dấu user dừng
+    _isStoppedByUser = true;
     await _player.stop();
     _currentPath = null;
     _currentTitle = null;

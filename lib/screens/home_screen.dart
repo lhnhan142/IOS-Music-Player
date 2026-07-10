@@ -75,6 +75,9 @@ class _HomeScreenState extends State<HomeScreen> {
     for (var song in songs) {
       final file = File(song.localPath);
       if (await file.exists()) {
+        // ✅ Lấy dung lượng file
+        final size = await file.length();
+        song.fileSize = size;
         validSongs.add(song);
       } else {
         await _db.deleteSong(song.id!);
@@ -203,6 +206,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   imageUrl: video['thumbnail'],
                   width: 50,
                   height: 50,
+                  memCacheWidth: 150,
+                  memCacheHeight: 150,
                   fit: BoxFit.cover,
                   placeholder: (context, url) => const Icon(Icons.music_note),
                   errorWidget: (context, url, error) => const Icon(Icons.broken_image),
@@ -321,6 +326,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               imageUrl: video['thumbnail'],
                               width: 50,
                               height: 50,
+                              memCacheWidth: 150,
+                              memCacheHeight: 150,
                               fit: BoxFit.cover,
                               placeholder: (context, url) => const Icon(Icons.music_note),
                               errorWidget: (context, url, error) => const Icon(Icons.broken_image),
@@ -511,14 +518,22 @@ class _HomeScreenState extends State<HomeScreen> {
                       artist: task.videoData['artist'],
                       thumbnailUrl: task.videoData['thumbnail'],
                     );
-                    return IgnorePointer(
-                      ignoring: true,
-                      child: SongItem(
-                        song: fakeSong,
-                        isDownloading: true,
-                        progress: task.progress,
-                        onTap: () {},
-                      ),
+
+                    return ListenableBuilder(
+                      listenable: task,
+                      builder: (context, child) {
+                        return SongItem(
+                          song: fakeSong,
+                          isDownloading: true,
+                          progress: task.progress,
+                          downloadSizeInfo: task.sizeInfo,
+                          onTap: () {},
+                          onCancelDownload: () {
+                            Provider.of<DownloadManager>(context, listen: false)
+                                .cancelDownload(task.videoData['id']);
+                          },
+                        );
+                      },
                     );
                   } else {
                     final song = _songs[i - downloadingTasks.length];
@@ -616,6 +631,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     imageUrl: thumbnail,
                     width: 50,
                     height: 50,
+                    memCacheWidth: 150,
+                    memCacheHeight: 150,
                     fit: BoxFit.cover,
                     placeholder: (context, url) => const Icon(Icons.music_note, color: Colors.white),
                     errorWidget: (context, url, error) => const Icon(Icons.music_note, color: Colors.white),
